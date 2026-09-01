@@ -849,9 +849,11 @@ module.exports = {
             const name = query.get('name') || ''
             const { expert, row } = await locateExpert(name, query.get('source') || undefined)
             const { fileCount, totalSize } = await countFilesAndSize(expert.dir)
+            const rawPluginText = await fsP.readFile(expert.pluginJsonPath, 'utf8')
             sendJson(res, 200, {
               ...expert,
-              plugin: parsePluginJson(await fsP.readFile(expert.pluginJsonPath, 'utf8')),
+              plugin: parsePluginJson(rawPluginText),
+              pluginJson: JSON.parse(rawPluginText),
               leadAgentFile: resolveLeadAgentFile(expert)?.name,
               dir: displayPath(expert.dir),
               sourceLabel: row.label,
@@ -906,7 +908,12 @@ module.exports = {
           if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/install')) {
             const body = await readJsonBody(req)
             if (typeof body.name !== 'string' || body.name === '') { sendJson(res, 400, { error: 'body must provide name' }); return }
-            const { expert } = await locateExpert(body.name, typeof body.from === 'string' && body.from !== '' && body.from !== 'builtin' ? body.from : undefined)
+            // from 兼容 client 的 source 字段；'auto'/缺省一律钉死为 builtin——
+            // 若解析到 dsh 源，overwrite 会先 rm 自己再空拷（v0.2.0 数据丢失事故），此路彻底封死
+            const from = typeof body.from === 'string' && body.from !== '' ? body.from
+              : typeof body.source === 'string' && body.source !== '' ? body.source : 'builtin'
+            if (from === 'dsh') throw new Error('cannot install from the dsh library (it is the install destination)')
+            const { expert } = await locateExpert(body.name, from)
             if (!isSafeExpertName(expert.name)) throw new Error(`invalid expert name: ${expert.name}`)
             const target = join(installedDir, expert.name)
             if (body.overwrite !== true) {

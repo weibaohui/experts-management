@@ -68,7 +68,7 @@ function setupPlugin(config, snapshotSkills = []) {
     res.write = (chunk) => { parts.push(Buffer.from(chunk)) }
     res.end = (chunk) => { if (chunk !== undefined) parts.push(Buffer.from(chunk)); fulfil({ status: out.status, body: Buffer.concat(parts).toString('utf8') }) }
     Promise.resolve(handler(req, res)).catch(reject)
-    if (rawBody !== undefined) process.nextTick(() => { req.emit('data', rawBody); req.emit('end') })
+    if (rawBody !== undefined) setTimeout(() => { req.emit('data', rawBody); req.emit('end') }, 30) // avatar 端点先 locate 再挂 body 监听，等它就绪
   })
   return { call, callRaw, registered, getInvalidations: () => invalidations }
 }

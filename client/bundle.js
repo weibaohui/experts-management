@@ -690,12 +690,15 @@ window.__ModuleLoader__.load({
         } catch (e) { setError(String(e && e.message)) } finally { setSaving(false) }
       }
       const startMetaEdit = () => {
-        const p = (detail && detail.plugin) || {}
+        const p = (detail && detail.pluginJson) || {}
         const loc = (v) => ({ zh: (v && v.zh) || '', en: (v && v.en) || '' })
+        const tags = Array.isArray(p.tags) ? p.tags : []
         setMetaForm({
           displayName: loc(p.displayName), profession: loc(p.profession),
           displayDescription: loc(p.displayDescription), defaultInitPrompt: loc(p.defaultInitPrompt),
-          tags: p.tags || [], quickPrompts: p.quickPrompts || [],
+          tagsZh: tags.map((x) => x.zh || '').filter(Boolean).join(','),
+          tagsEn: tags.map((x) => x.en || '').filter(Boolean).join(','),
+          quickPrompts: Array.isArray(p.quickPrompts) ? p.quickPrompts : [],
         })
         setMetaEdit(true)
       }
@@ -705,11 +708,15 @@ window.__ModuleLoader__.load({
         const body = { metadata: {
           displayName: metaForm.displayName, profession: metaForm.profession,
           displayDescription: metaForm.displayDescription, defaultInitPrompt: metaForm.defaultInitPrompt,
-          tags: splitList(metaForm.tagsZh).map((zh) => ({ zh, en: '' })).concat(splitList(metaForm.tagsEn).map((en) => ({ zh: '', en }))),
+          tags: (function () {
+            const zhList = splitList(metaForm.tagsZh); const enList = splitList(metaForm.tagsEn)
+            const len = Math.max(zhList.length, enList.length)
+            return Array.from({ length: len }, (_, i) => ({ zh: zhList[i] || '', en: enList[i] || '' })).filter((t) => t.zh !== '' || t.en !== '')
+          })(),
           quickPrompts: metaForm.quickPrompts,
         } }
         try {
-          await fetchJson(`${API}/metadata`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+          await fetchJson(`${API}/metadata`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ...body }) })
           setMetaEdit(false); flash(t('saved')); loadDetail()
         } catch (e) { setError(String(e && e.message)) } finally { setSaving(false) }
       }
