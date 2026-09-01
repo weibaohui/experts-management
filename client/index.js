@@ -481,7 +481,7 @@ function DetailModal({ name, source, t, onClose, onInstalled, onDeleted }) {
         h('button', { className: 'exp-btn exp-modal-close', onClick: onClose }, t('close'))),
       error !== '' ? h('div', { className: 'exp-empty' }, `${t('loadFailed')}: ${error}`) : null,
       detail === null && error === '' ? h('div', { className: 'exp-empty' }, '…') : null,
-      detail !== null ? h(h.Fragment, null,
+      detail !== null ? h('div', { style: { display: 'contents' } },
         h('div', { className: 'exp-form-row' },
           (detail.descZh || detail.descEn) ? h('div', { className: 'exp-desc', style: { WebkitLineClamp: 'unset' } }, detail.descZh || detail.descEn) : null),
         h('div', { className: 'exp-status-line' },
