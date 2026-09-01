@@ -43,7 +43,7 @@ test('apply registers dictionaries and all slot entries', () => {
   const menuNs = locales.filter((l) => l.ns === 'slash.menu')
   assert.deepEqual(menuNs.map((l) => l.lang).sort(), ['en', 'zh'])
   assert.equal(menuNs[0].dict[EXPERT_SOURCE_NAME] !== undefined, true)
-  assert.deepEqual(injected, ['sidebar.footer.action', 'settings.section', 'conversation.input.left'])
+  assert.deepEqual(injected, ['settings.section', 'conversation.input.left'])
 })
 
 test('apply survives a missing locale service (EN fallback)', () => {
@@ -52,7 +52,7 @@ test('apply survives a missing locale service (EN fallback)', () => {
     slots: { inject: (name) => injected.push(name) },
     effect: (fn) => fn(),
   })
-  assert.equal(injected.length, 3)
+  assert.equal(injected.length, 2)
 })
 
 test('expert trigger source: candidates filtered by query, section replaces group title, pick inserts token', async () => {

@@ -1,7 +1,8 @@
 /**
  * dsh-plugin-experts-management - Browser half.
  *
- * One React app for every surface (sidebar overlay + settings section):
+ * One React app for every surface (settings section; the former sidebar
+ *  fullscreen-overlay entry was retired — pair with dsh-settings-ui):
  * expert management page (installed / market views + detail modal + market
  * sync settings). Plus the composer integration:
  * - an `expert` input-trigger source on `/` (candidates from the plugin's own
@@ -924,20 +925,6 @@ module.exports = {
     } catch (e) { try { console.error('[experts-management] composer inject:', e) } catch {} }
     ctx.effect(() => {
       try {
-        ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-          name: 'sidebar.footer.action',
-          id: CLIENT_NAME,
-          order: 60,
-          locale: NS,
-          label: () => t('title'),
-          inject: () => ({ t }),
-        }, function FooterSlot(apiProps) {
-          return h(FooterSlotComponent, { __t: t, wide: apiProps && apiProps.wide })
-        }))
-      } catch (e) { (globalThis.__expErrors = globalThis.__expErrors || []).push('footer:' + (e && e.message)); throw e }
-    }, 'experts-management: sidebar footer action')
-    ctx.effect(() => {
-      try {
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: CLIENT_NAME,
@@ -969,51 +956,6 @@ module.exports = {
       } catch (e) { (globalThis.__expErrors = globalThis.__expErrors || []).push('input.left:' + (e && e.message)); throw e }
     }, 'experts-management: input left button')
   },
-}
-
-/** Sidebar footer button inline style — mirrors the skills-market entry so
- *  both plugins read identically in the rail (icon + label, full width). */
-function footerStyle() {
-  return { display: 'inline-flex', alignItems: 'center', gap: 6, margin: '4px 10px', padding: '8px 10px',
-    border: 'none', borderRadius: 8, background: 'transparent', color: 'var(--dsw-alias-label-secondary)',
-    font: 'inherit', fontSize: 13, cursor: 'pointer', width: 'calc(100% - 20px)', textAlign: 'left' }
-}
-
-/** Panel state lives OUTSIDE React: sidebar churn remounts slot entries, and
- *  any state kept in them is torn down with them (skills-market 同款修法）。 */
-const panelStore = {
-  open: false,
-  listeners: new Set(),
-  set(v) { panelStore.open = v; for (const fn of panelStore.listeners) fn(v) },
-  subscribe(fn) { panelStore.listeners.add(fn); return () => panelStore.listeners.delete(fn) },
-}
-
-/** Footer slot entry: the button, and — when open — the whole experts page
- *  portaled to <body> as a fullscreen overlay (same pattern as the skills
- *  market footer entry). */
-function FooterSlotComponent(props) {
-  const [open, setOpen] = useState(panelStore.open)
-  useEffect(() => panelStore.subscribe(setOpen), [])
-  useEffect(ensureStyles, [])
-  const t = props.__t
-  const labelText = t ? t('title') : 'Expert Management'
-  // The sidebar renders this entry with a `wide` owner prop: the collapsed
-  // rail passes false and shows the icon alone; expanded shows the label.
-  const wide = props.wide !== false
-  return h('span', { style: { display: 'contents' } },
-    h('button', { title: labelText, 'aria-label': labelText, onClick: () => panelStore.set(!panelStore.open),
-        style: footerStyle() },
-      '\u{1F465}',
-      wide ? ' ' + labelText : ''),
-    open && (() => {
-      const page = h(ExpertsPage, { t, embedded: false, onClose: () => panelStore.set(false) })
-      // Fullscreen: portal the fixed-position page to <body> so no sidebar
-      // ancestor (transform-containing or otherwise) can clip it.
-      if (RDP && typeof RDP.createPortal === 'function' && typeof document !== 'undefined') {
-        return RDP.createPortal(page, document.body)
-      }
-      return page // fallback: fixed positioning still applies from here
-    })())
 }
 
 /** Composer tool-row button: 加号+文字 chip，点击在按钮上方打开自带搜索的

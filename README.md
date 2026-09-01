@@ -27,7 +27,7 @@ dsh plugin --profile web add @weibaohui/experts-management -w
 
 ## 使用
 
-1. 打开 Web UI → 侧栏进入 **专家管理** 页面
+1. 打开 Web UI → **设置** → 左侧「专家管理」section 即完整管理页（可搭配 dsh-settings-ui 插件把设置窗口调大/全屏）
 2. 「市场」视图浏览/搜索/安装专家（市场检出在插件自己的目录，不碰 ntd 应用）；「已安装」视图管理用户库
 3. 详情页可预览角色定义全文、团队成员、关联技能与 plugin.json
 4. 对话时点输入框工具行的「＋ 专家」按钮（可搜索；或直接输入 `/expert-backend-architect`），该专家的角色定义即注入本轮对话
