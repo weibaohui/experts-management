@@ -55,16 +55,33 @@ test('apply survives a missing locale service (EN fallback)', () => {
   assert.equal(injected.length, 3)
 })
 
-test('expert trigger source: candidates filtered by query, pick inserts the literal token', async () => {
-  const source = makeExpertSource()
-  assert.equal(source.trigger, '/')
-  assert.equal(source.name, EXPERT_SOURCE_NAME)
-  // 空查询返回全部候选（roster 未预热时为空数组，不抛错）
-  assert.deepEqual(await source.candidates({}, { query: '', signal: new AbortController().signal }), [])
-  const onPick = source.onPick({ candidate: { name: 'expert-backend-architect' } })
-  assert.deepEqual(onPick, { text: '/expert-backend-architect ' })
-  // 未热身时 lexicon 返回 undefined（渲染侧跳过装饰，不发请求）
-  assert.equal(source.lexicon({}), undefined)
+test('expert trigger source: candidates filtered by query, section replaces group title, pick inserts token', async () => {
+  const t = (k) => ({ menuGroup: '专家' })[k] ?? k
+  // 冷态断言必须先于预热：roster 是模块级缓存，跨 source 实例共享
+  const cold = makeExpertSource(t)
+  assert.equal(cold.lexicon({}), undefined)
+  assert.deepEqual(await cold.candidates({}, { query: '', signal: new AbortController().signal }), [])
+
+  // stub fetch：预热 roster（真 fetch 的相对 URL 在 node 下会失败）
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ installed: [{ name: 'backend-architect', description: '后端', expertType: 'agent' }], market: [] }),
+  })
+  try {
+    const source = makeExpertSource(t)
+    assert.equal(source.trigger, '/')
+    assert.equal(source.name, EXPERT_SOURCE_NAME)
+    await client.__internals.fetchRoster(true)
+    const rows = await source.candidates({}, { query: 'expert-backend', signal: new AbortController().signal })
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].name, 'expert-backend-architect')
+    assert.equal(rows[0].section, '专家') // 取代 'expert' 源标题行
+    assert.deepEqual(source.onPick({ candidate: rows[0] }), { text: '/expert-backend-architect ' })
+    assert.deepEqual(source.lexicon({}), ['expert-backend-architect'])
+  } finally {
+    globalThis.fetch = realFetch
+  }
 })
 
 test('openTriggerSource toggles via sessionOf with a synthetic end-of-draft span', () => {

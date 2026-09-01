@@ -132,6 +132,7 @@ window.__ModuleLoader__.load({
       loadFailed: '加载失败',
       noDescription: '暂无描述',
       avatarLoadFailed: '头像加载失败',
+      menuGroup: '专家',
       pickExpert: '＋专家',
       pickExpertTitle: '选择一位专家，以该专家的身份执行本条任务',
     }
@@ -196,6 +197,7 @@ window.__ModuleLoader__.load({
       loadFailed: 'Load failed',
       noDescription: 'No description',
       avatarLoadFailed: 'Avatar failed to load',
+      menuGroup: 'Experts',
       pickExpert: '+ Expert',
       pickExpertTitle: 'Pick an expert to handle this message in their persona',
     }
@@ -321,8 +323,10 @@ window.__ModuleLoader__.load({
       return expertRoster
     }
 
-    /** InputTriggerSource（ui-skill 同构）：pick 落 `/expert-<name> ` 字面量，宿主手势边界注入角色。 */
-    function makeExpertSource() {
+    /** InputTriggerSource（ui-skill 同构）：pick 落 `/expert-<name> ` 字面量，宿主手势边界注入角色。
+     *  候选声明 section 取代源标题行——slash.menu 命名空间已被宿主注册，无法叠加本地化。 */
+    function makeExpertSource(t) {
+      const tt = t || ((key) => EN[key] ?? key)
       return {
         trigger: '/',
         name: EXPERT_SOURCE_NAME,
@@ -331,6 +335,7 @@ window.__ModuleLoader__.load({
           const rows = (await fetchRoster()) || []
           if (signal && signal.aborted) return []
           return rows.filter((r) => r.name.startsWith(String(query || ''))).slice(0, 80)
+            .map((r) => ({ ...r, section: tt('menuGroup') }))
         },
         warm() { void fetchRoster() },
         lexicon() {
@@ -491,7 +496,7 @@ window.__ModuleLoader__.load({
             h('button', { className: 'exp-btn exp-modal-close', onClick: onClose }, t('close'))),
           error !== '' ? h('div', { className: 'exp-empty' }, `${t('loadFailed')}: ${error}`) : null,
           detail === null && error === '' ? h('div', { className: 'exp-empty' }, '…') : null,
-          detail !== null ? h(h.Fragment, null,
+          detail !== null ? h('div', { style: { display: 'contents' } },
             h('div', { className: 'exp-form-row' },
               (detail.descZh || detail.descEn) ? h('div', { className: 'exp-desc', style: { WebkitLineClamp: 'unset' } }, detail.descZh || detail.descEn) : null),
             h('div', { className: 'exp-status-line' },
@@ -720,7 +725,7 @@ window.__ModuleLoader__.load({
             ctx.inject(['inputTriggers', 'sessions'], (scope) => {
               composerScope = scope
               if (scope && scope.inputTriggers && typeof scope.inputTriggers.registerSource === 'function') {
-                ctx.effect(() => scope.inputTriggers.registerSource(makeExpertSource()), 'experts-management: expert trigger source')
+                ctx.effect(() => scope.inputTriggers.registerSource(makeExpertSource(t)), 'experts-management: expert trigger source')
               }
             })
           }
