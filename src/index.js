@@ -516,6 +516,42 @@ function baseSettings(config) {
   return base
 }
 
+// ── 编辑端点（v0.3）：只写 dsh 用户库；内置只读 ─────────────────────────
+const EDIT_BODY_MAX_BYTES = 8 * 1024 * 1024
+
+/** 魔数嗅探图片类型；非白名单格式返回 null。 */
+function sniffImage(buf) {
+  if (!buf || buf.length < 12) return null
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return { ext: 'png', type: 'image/png' }
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { ext: 'jpg', type: 'image/jpeg' }
+  const head = buf.slice(0, 12)
+  if (head.toString('latin1').startsWith('GIF8')) return { ext: 'gif', type: 'image/gif' }
+  if (head.toString('latin1').startsWith('RIFF') && head.toString('latin1').slice(8) === 'WEBP') return { ext: 'webp', type: 'image/webp' }
+  return null
+}
+
+const readRawBody = (req, cap) => new Promise((fulfil, reject) => {
+  let size = 0
+  const chunks = []
+  req.on('data', (chunk) => {
+    size += chunk.length
+    if (size > cap) { reject(new Error(`image exceeds ${cap} bytes`)); if (typeof req.destroy === 'function') req.destroy(); return }
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  })
+  req.on('end', () => fulfil(Buffer.concat(chunks)))
+  req.on('error', reject)
+})
+
+/** 编辑端点公共前置：只解析 dsh 用户库副本（内置只读）；名字围栏。 */
+async function locateEditable(locateExpert, name) {
+  if (typeof name !== 'string' || name === '') throw new Error('body must provide name')
+  const { expert } = await locateExpert(name, 'dsh')
+  if (!isSafeExpertName(expert.name)) throw new Error(`invalid expert name: ${expert.name}`)
+  return expert
+}
+
+const MD_MAX_CHARS = 512 * 1024
+
 // ── Module export ────────────────────────────────────────────────────────
 
 module.exports = {
@@ -896,6 +932,139 @@ module.exports = {
             await fsP.rm(target, { recursive: true })
             invalidate()
             sendJson(res, 200, { removed: body.name, source: 'dsh' })
+            return
+          }
+
+          // ── 编辑端点（v0.3）：仅 dsh 用户库可编辑，内置只读 ──
+
+          // PUT /experts-management/api/agent-md {name, agent?, content} — 角色定义全文
+          if (req.method === 'PUT' && apiPath.endsWith('/experts-management/api/agent-md')) {
+            const body = await readJsonBody(req)
+            const expert = await locateEditable(locateExpert, body.name)
+            if (typeof body.content !== 'string' || body.content.trim() === '') throw new Error('content must be a non-empty string')
+            if (body.content.length > MD_MAX_CHARS) throw new Error(`content exceeds ${MD_MAX_CHARS} chars`)
+            const normRel = (p0) => String(p0 || '').replace(/^\.\//, '')
+            const agentFile = body.agent !== undefined && body.agent !== ''
+              ? expert.agentFiles.find((a) => a.name === body.agent || normRel(a.relPath) === normRel(body.agent) || basename(a.mdPath) === body.agent)
+              : resolveLeadAgentFile(expert)
+            if (agentFile === undefined) throw new Error(`agent not found in expert '${expert.name}'`)
+            const full = resolveWithin(expert.dir, agentFile.relPath)
+            if (full === undefined || resolve(full) !== resolve(agentFile.mdPath)) throw new Error('agent file path escaped the expert dir')
+            await atomicWriteJs(full, body.content)
+            invalidate()
+            sendJson(res, 200, { ok: true, agent: agentFile.name })
+            return
+          }
+
+          // PUT /experts-management/api/metadata {name, metadata} — plugin.json 展示字段（读-改-写保留未知键）
+          if (req.method === 'PUT' && apiPath.endsWith('/experts-management/api/metadata')) {
+            const body = await readJsonBody(req)
+            const meta = body.metadata
+            if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) throw new Error('metadata must be an object')
+            const expert = await locateEditable(locateExpert, body.name)
+            const pluginJson = JSON.parse(await fsP.readFile(expert.pluginJsonPath, 'utf8'))
+            const normLocalized = (v) => ({ zh: typeof v.zh === 'string' ? v.zh : '', en: typeof v.en === 'string' ? v.en : '' })
+            for (const key of ['displayName', 'profession', 'displayDescription', 'defaultInitPrompt']) {
+              if (meta[key] === undefined) continue
+              const v = meta[key]
+              if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${key} must be an object`)
+              for (const lang of ['zh', 'en']) {
+                if (v[lang] !== undefined && (typeof v[lang] !== 'string' || v[lang].length > 2000)) throw new Error(`${key}.${lang} must be a string (≤2000 chars)`)
+              }
+              pluginJson[key] = normLocalized(v)
+            }
+            const listOfLocalized = (v, label) => {
+              if (!Array.isArray(v) || v.length > 20) throw new Error(`${label} must be an array (≤20)`)
+              return v.map((item) => {
+                if (item === null || typeof item !== 'object' || Array.isArray(item)) throw new Error(`${label} items must be objects`)
+                return { zh: typeof item.zh === 'string' ? item.zh.slice(0, 2000) : '', en: typeof item.en === 'string' ? item.en.slice(0, 2000) : '' }
+              }).filter((item) => item.zh !== '' || item.en !== '')
+            }
+            if (meta.tags !== undefined) pluginJson.tags = listOfLocalized(meta.tags, 'tags')
+            if (meta.quickPrompts !== undefined) pluginJson.quickPrompts = listOfLocalized(meta.quickPrompts, 'quickPrompts')
+            await atomicWriteJs(expert.pluginJsonPath, JSON.stringify(pluginJson, null, 2))
+            invalidate()
+            sendJson(res, 200, { ok: true, plugin: pluginJson })
+            return
+          }
+
+          // PUT /experts-management/api/expert-skills {name, attach?, detach?} — 技能副本同步
+          if (req.method === 'PUT' && apiPath.endsWith('/experts-management/api/expert-skills')) {
+            const body = await readJsonBody(req)
+            const attach = Array.isArray(body.attach) ? body.attach.map(String) : []
+            const detach = Array.isArray(body.detach) ? body.detach.map(String) : []
+            if (attach.length === 0 && detach.length === 0) throw new Error('attach and detach must not both be empty')
+            const kebab = (n) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(n)
+            for (const n of [...attach, ...detach]) {
+              if (!kebab(n)) throw new Error(`invalid skill name: ${n}`)
+            }
+            const expert = await locateEditable(locateExpert, body.name)
+            const pluginJson = JSON.parse(await fsP.readFile(expert.pluginJsonPath, 'utf8'))
+            // detach 先验后删（任一未附 → 整体拒绝，避免半套变更）
+            const detachDirs = []
+            for (const n of detach) {
+              const dir = resolveWithin(expert.dir, `./skills/${n}`)
+              if (dir === undefined) throw new Error(`skill '${n}' is not attached to expert '${expert.name}'`)
+              const st = await fsP.stat(dir).catch(() => undefined)
+              if (st === undefined || !st.isDirectory()) throw new Error(`skill '${n}' is not attached to expert '${expert.name}'`)
+              detachDirs.push({ n, dir })
+            }
+            // attach 全部先在技能注册表解析源目录（任一缺失整体拒绝）
+            const snapshot = await ctx.skills.snapshot({})
+            const attachDirs = attach.map((n) => {
+              const entry = (snapshot.skills || []).find((x) => x.name === n)
+              if (entry === undefined || entry.resourceBase === undefined || entry.resourceBase.kind !== 'directory' || typeof entry.resourceBase.path !== 'string') {
+                throw new Error(`skill '${n}' not found in the skill registry`)
+              }
+              return { n, from: entry.resourceBase.path }
+            })
+            for (const d of detachDirs) await fsP.rm(d.dir, { recursive: true, force: true })
+            for (const a of attachDirs) {
+              const target = join(expert.dir, 'skills', a.n)
+              await fsP.rm(target, { recursive: true, force: true }) // 同名覆盖 = 技能库更新同步进专家
+              await copyDir(a.from, target)
+            }
+            // plugin.json.skills = 声明同步：原序保留存活项 + 追加新 attach（以 skills/ 目录实况为准）
+            const skillRoot = join(expert.dir, 'skills')
+            const present = new Set()
+            try {
+              for (const ent of await fsP.readdir(skillRoot, { withFileTypes: true })) if (ent.isDirectory()) present.add(ent.name)
+            } catch { /* 无 skills 目录 */ }
+            const oldNames = (Array.isArray(pluginJson.skills) ? pluginJson.skills : []).map((r) => String(r).replace(/^\.\/skills\//, '').replace(/^\.\//, ''))
+            const finalNames = []
+            for (const n of [...oldNames, ...attach]) {
+              if (present.has(n) && !finalNames.includes(n)) finalNames.push(n)
+            }
+            pluginJson.skills = finalNames.map((n) => `./skills/${n}`)
+            await atomicWriteJs(expert.pluginJsonPath, JSON.stringify(pluginJson, null, 2))
+            invalidate()
+            sendJson(res, 200, { ok: true, skills: pluginJson.skills })
+            return
+          }
+
+          // POST /experts-management/api/avatar?name= — 原始图片体（魔数嗅探）
+          if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/avatar')) {
+            const expert = await locateEditable(locateExpert, query.get('name') || '')
+            const imgBody = await readRawBody(req, EDIT_BODY_MAX_BYTES)
+            const img = sniffImage(imgBody)
+            if (img === null) throw new Error('unsupported image (png/jpg/gif/webp only)')
+            const rel = `avatars/expert.${img.ext}`
+            await atomicWriteJs(join(expert.dir, rel), imgBody)
+            const pluginJson = JSON.parse(await fsP.readFile(expert.pluginJsonPath, 'utf8'))
+            pluginJson.avatar = rel
+            await atomicWriteJs(expert.pluginJsonPath, JSON.stringify(pluginJson, null, 2))
+            invalidate()
+            sendJson(res, 200, { ok: true, avatar: rel })
+            return
+          }
+
+          // GET /experts-management/api/available-skills — 技能关联选择器数据源
+          if (req.method === 'GET' && apiPath.endsWith('/experts-management/api/available-skills')) {
+            const snapshot = await ctx.skills.snapshot({})
+            const list = (snapshot.skills || [])
+              .filter((x) => x.invocation === undefined || x.invocation.modelInvocable !== false)
+              .map((x) => ({ name: x.name, description: typeof x.description === 'string' ? x.description.slice(0, 200) : '' }))
+            sendJson(res, 200, { skills: list })
             return
           }
 
