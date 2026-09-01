@@ -51,3 +51,7 @@ npm run check        # 语法检查
 npm test             # node --test
 npm run build:client # 生成 client/bundle.js
 ```
+
+## 联系我 :飞书群
+
+![link](https://foruda.gitee.com/images/1774880015525784725/4fd67005_77493.png "link")
