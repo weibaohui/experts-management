@@ -1,0 +1,112 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+// Plain-Node 契约测试：client/index.js 自带 React/primitives shim，可直接 require
+const client = require('../client/index.js')
+const { NS, ZH, EN, matchExpert, avatarUrl, EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource } = client.__internals
+
+test('client exports the browser-plane contract', () => {
+  assert.equal(client.name, '@weibaohui/experts-management')
+  assert.deepEqual(client.inject, ['slots', 'locale'])
+  assert.equal(typeof client.apply, 'function')
+  assert.equal(typeof client.__boot, 'function')
+})
+
+test('zh/en locale dictionaries cover the same key set', () => {
+  const zhKeys = Object.keys(ZH).sort()
+  const enKeys = Object.keys(EN).sort()
+  assert.deepEqual(zhKeys, enKeys)
+  assert.ok(zhKeys.length > 20)
+})
+
+test('apply registers dictionaries and all slot entries', () => {
+  const locales = []
+  const injected = []
+  const ctx = {
+    locale: {
+      register: (ns, lang, dict) => locales.push({ ns, lang, dict }),
+      bind: () => null,
+    },
+    slots: {
+      inject: (name, factory) => injected.push(name),
+    },
+    effect: (fn) => fn(),
+    inject: (services, fn) => fn({}),
+  }
+  client.apply(ctx)
+  const own = locales.filter((l) => l.ns === NS)
+  assert.deepEqual(own.map((l) => l.lang).sort(), ['en', 'zh'])
+  assert.ok(own.length >= 2)
+  // slash.menu 组标题（expert 源的中英文案）也一并注册
+  const menuNs = locales.filter((l) => l.ns === 'slash.menu')
+  assert.deepEqual(menuNs.map((l) => l.lang).sort(), ['en', 'zh'])
+  assert.equal(menuNs[0].dict[EXPERT_SOURCE_NAME] !== undefined, true)
+  assert.deepEqual(injected, ['sidebar.footer.action', 'settings.section', 'conversation.input.left'])
+})
+
+test('apply survives a missing locale service (EN fallback)', () => {
+  const injected = []
+  client.apply({
+    slots: { inject: (name) => injected.push(name) },
+    effect: (fn) => fn(),
+  })
+  assert.equal(injected.length, 3)
+})
+
+test('expert trigger source: candidates filtered by query, pick inserts the literal token', async () => {
+  const source = makeExpertSource()
+  assert.equal(source.trigger, '/')
+  assert.equal(source.name, EXPERT_SOURCE_NAME)
+  // 空查询返回全部候选（roster 未预热时为空数组，不抛错）
+  assert.deepEqual(await source.candidates({}, { query: '', signal: new AbortController().signal }), [])
+  const onPick = source.onPick({ candidate: { name: 'expert-backend-architect' } })
+  assert.deepEqual(onPick, { text: '/expert-backend-architect ' })
+  // 未热身时 lexicon 返回 undefined（渲染侧跳过装饰，不发请求）
+  assert.equal(source.lexicon({}), undefined)
+})
+
+test('openTriggerSource toggles via sessionOf with a synthetic end-of-draft span', () => {
+  const calls = []
+  const scope = {
+    sessions: { scope: (id) => ({ id }) },
+    inputTriggers: {
+      sessionOf: (actx) => ({
+        toggleSource: (name, hit) => calls.push({ name, hit, actx }),
+      }),
+    },
+  }
+  const input = { draft: '帮我看看', draftRev: 7 }
+  const ok = openTriggerSource(scope, 'session-1', input, EXPERT_SOURCE_NAME)
+  assert.equal(ok, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].name, EXPERT_SOURCE_NAME)
+  assert.equal(calls[0].actx.id, 'session-1')
+  assert.equal(calls[0].hit.trigger, '/')
+  assert.equal(calls[0].hit.query, '')
+  assert.equal(calls[0].hit.position, 'inline') // 草稿非空 → inline
+  assert.deepEqual(calls[0].hit.span, { start: 4, end: 4, draftRev: 7 })
+
+  // 空草稿 → leading；服务缺席 → false
+  openTriggerSource(scope, 'session-1', { draft: '', draftRev: 1 }, EXPERT_SOURCE_NAME)
+  assert.equal(calls[1].hit.position, 'leading')
+  assert.equal(openTriggerSource(null, 's', input, EXPERT_SOURCE_NAME), false)
+  assert.equal(openTriggerSource({ sessions: {} }, 's', input, EXPERT_SOURCE_NAME), false)
+  // scope 不可解析 → false
+  assert.equal(openTriggerSource({ sessions: { scope: () => undefined }, inputTriggers: { sessionOf: () => ({}) } }, 's', input, EXPERT_SOURCE_NAME), false)
+})
+
+test('matchExpert searches name/displayName/profession/description/tags', () => {
+  const row = { name: 'backend-architect', displayName: '磐石石', profession: '后端架构师', description: '分布式系统', tags: ['微服务'] }
+  assert.equal(matchExpert(row, '磐石'), true)
+  assert.equal(matchExpert(row, 'microservice'.toLowerCase()) || matchExpert(row, '微服务'), true)
+  assert.equal(matchExpert(row, 'kubernetes'), false)
+  assert.equal(matchExpert(row, ''), true)
+})
+
+test('avatarUrl builds the encoded API url, member optional', () => {
+  assert.equal(avatarUrl('backend-architect', 'market'), '/experts-management/api/avatar?name=backend-architect&source=market')
+  // URLSearchParams 把空格编成 '+'，服务端 URL.searchParams 解码回空格
+  assert.equal(avatarUrl('a b', 'extra-src', 'lead-a'), '/experts-management/api/avatar?name=a+b&source=extra-src&member=lead-a')
+})
