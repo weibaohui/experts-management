@@ -34,8 +34,8 @@ function setupPlugin(config) {
     settings: { register: (ns, schema, opts) => ({ get: () => ({ ...opts.base }), update: async () => {} }) },
   }
   plugin.apply(ctx, {
-    marketRepoDir: join(tmpdir(), 'dsh-experts-market-test-' + Math.random().toString(36).slice(2)),
-    marketSync: { syncOnStartup: false, autoSync: false },
+    builtinRepoDir: join(tmpdir(), 'dsh-experts-builtin-test-' + Math.random().toString(36).slice(2)),
+    builtinSync: { syncOnStartup: false, autoSync: false },
     ...config,
   })
   const call = async (method, url, body) => {
@@ -236,18 +236,18 @@ test('candidateName prefixes expert- and must stay kebab', () => {
 
 // ── Provider + API over fixtures ─────────────────────────────────────────
 
-test('provider lists experts with expert- prefix, model-invisible + user-invocable, installed shadows market', async () => {
+test('provider lists experts with expert- prefix, model-invisible + user-invocable, installed shadows builtin', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-experts-'))
   try {
-    const market = join(root, 'market', 'experts')
-    await mkdir(market, { recursive: true })
-    await writeExpert(market, 'backend-architect', { skills: ['fullstack-dev'] })
-    await writeExpert(market, 'software-company', { team: true })
+    const builtin = join(root, 'builtin', 'experts')
+    await mkdir(builtin, { recursive: true })
+    await writeExpert(builtin, 'backend-architect', { skills: ['fullstack-dev'] })
+    await writeExpert(builtin, 'software-company', { team: true })
     const installed = join(root, 'installed')
     await mkdir(installed, { recursive: true })
     await writeExpert(installed, 'backend-architect', { skills: [] })
 
-    const env = setupPlugin({ marketRepoDir: join(root, 'market'), installedDir: installed })
+    const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: installed })
     const candidates = await env.registered.list()
     assert.equal(candidates.length, 2)
     const byName = Object.fromEntries(candidates.map((c) => [c.name, c]))
@@ -256,7 +256,7 @@ test('provider lists experts with expert- prefix, model-invisible + user-invocab
     assert.equal(backend.rank, 100)
     assert.deepEqual(backend.invocation, { modelInvocable: false, userInvocable: true })
     const team = byName['expert-software-company']
-    assert.equal(team.source, 'market')
+    assert.equal(team.source, 'builtin')
     assert.equal(team.rank, 500)
 
     // get(): 已装副本生效（内容来自用户库）——市场副本带技能、用户库副本不带，
@@ -278,24 +278,24 @@ test('provider lists experts with expert- prefix, model-invisible + user-invocab
   }
 })
 
-test('list API: sources include the git market; installed/market buckets and summaries are correct', async () => {
+test('list API: sources include the git builtin; mine/builtin buckets and summaries are correct', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-experts-api-'))
   try {
-    const market = join(root, 'market', 'experts')
-    await mkdir(market, { recursive: true })
-    await writeExpert(market, 'backend-architect', { avatar: true, skills: ['fullstack-dev'] })
+    const builtin = join(root, 'builtin', 'experts')
+    await mkdir(builtin, { recursive: true })
+    await writeExpert(builtin, 'backend-architect', { avatar: true, skills: ['fullstack-dev'] })
     const installed = join(root, 'installed')
     await mkdir(installed, { recursive: true })
     await writeExpert(installed, 'my-expert')
 
-    const env = setupPlugin({ marketRepoDir: join(root, 'market'), installedDir: installed })
+    const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: installed })
     const res = await env.call('GET', '/experts-management/api')
     assert.equal(res.status, 200)
-    const { sources, installed: installedRows, market: marketRows } = res.payload
-    assert.ok(sources.some((s) => s.key === 'market' && s.dir.endsWith(join('market', 'experts'))))
-    assert.deepEqual(installedRows.map((e) => e.name), ['my-expert'])
-    assert.deepEqual(marketRows.map((e) => e.name), ['backend-architect'])
-    const row = marketRows[0]
+    const { sources, mine: mineRows, builtin: builtinRows } = res.payload
+    assert.ok(sources.some((s) => s.key === 'builtin' && s.dir.endsWith(join('builtin', 'experts'))))
+    assert.deepEqual(mineRows.map((e) => e.name), ['my-expert'])
+    assert.deepEqual(builtinRows.map((e) => e.name), ['backend-architect'])
+    const row = builtinRows[0]
     assert.equal(row.displayName, '中文backend-architect')
     assert.equal(row.profession, '后端架构师')
     assert.equal(row.expertType, 'agent')
@@ -309,37 +309,37 @@ test('list API: sources include the git market; installed/market buckets and sum
 test('detail / agent-md / avatar / file endpoints serve and stay within the expert dir', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-experts-detail-'))
   try {
-    const market = join(root, 'market', 'experts')
-    await mkdir(market, { recursive: true })
-    await writeExpert(market, 'backend-architect', { avatar: true, skills: ['fullstack-dev'] })
+    const builtin = join(root, 'builtin', 'experts')
+    await mkdir(builtin, { recursive: true })
+    await writeExpert(builtin, 'backend-architect', { avatar: true, skills: ['fullstack-dev'] })
 
-    const env = setupPlugin({ marketRepoDir: join(root, 'market'), installedDir: join(root, 'installed') })
+    const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: join(root, 'installed') })
 
-    const detail = await env.call('GET', '/experts-management/api/detail?name=backend-architect&source=market')
+    const detail = await env.call('GET', '/experts-management/api/detail?name=backend-architect&source=builtin')
     assert.equal(detail.status, 200)
     assert.equal(detail.payload.expertType, 'agent')
     assert.equal(detail.payload.leadAgentFile, 'backend-architect')
     assert.equal(detail.payload.fileCount, 5) // plugin.json + agent md + SKILL.md + reference.md + 头像
     assert.ok(detail.payload.dir.length > 0)
 
-    const md = await env.call('GET', '/experts-management/api/agent-md?name=backend-architect&source=market')
+    const md = await env.call('GET', '/experts-management/api/agent-md?name=backend-architect&source=builtin')
     assert.equal(md.status, 200)
     assert.equal(md.payload.agent, 'backend-architect')
     assert.match(md.payload.content, /完整角色定义/)
 
-    const scoped = await env.call('GET', `/experts-management/api/agent-md?name=backend-architect&source=market&agent=${encodeURIComponent('agents/backend-architect.md')}`)
+    const scoped = await env.call('GET', `/experts-management/api/agent-md?name=backend-architect&source=builtin&agent=${encodeURIComponent('agents/backend-architect.md')}`)
     assert.equal(scoped.status, 200)
 
-    const avatar = await env.callRaw('GET', '/experts-management/api/avatar?name=backend-architect&source=market')
+    const avatar = await env.callRaw('GET', '/experts-management/api/avatar?name=backend-architect&source=builtin')
     assert.equal(avatar.status, 200)
     assert.equal(avatar.body, 'PNGBYTES')
 
-    const file = await env.callRaw('GET', '/experts-management/api/file?name=backend-architect&source=market&path=skills%2Ffullstack-dev%2Freference.md')
+    const file = await env.callRaw('GET', '/experts-management/api/file?name=backend-architect&source=builtin&path=skills%2Ffullstack-dev%2Freference.md')
     assert.equal(file.status, 200)
     assert.equal(file.body, 'extra file')
 
     // 越界路径被拒
-    const escape = await env.call('GET', '/experts-management/api/file?name=backend-architect&source=market&path=..%2F..%2Fescape.md')
+    const escape = await env.call('GET', '/experts-management/api/file?name=backend-architect&source=builtin&path=..%2F..%2Fescape.md')
     assert.equal(escape.status, 400)
     // 未知专家 400
     const missing = await env.call('GET', '/experts-management/api/detail?name=nope')
@@ -349,19 +349,19 @@ test('detail / agent-md / avatar / file endpoints serve and stay within the expe
   }
 })
 
-test('install copies into the dsh library and shadows the market row; delete removes only from dsh', async () => {
+test('install copies into the dsh library and shadows the builtin row; delete removes only from dsh', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-experts-install-'))
   try {
-    const market = join(root, 'market', 'experts')
-    await mkdir(market, { recursive: true })
-    await writeExpert(market, 'backend-architect', { skills: ['fullstack-dev'] })
+    const builtin = join(root, 'builtin', 'experts')
+    await mkdir(builtin, { recursive: true })
+    await writeExpert(builtin, 'backend-architect', { skills: ['fullstack-dev'] })
     const installed = join(root, 'installed')
     await mkdir(installed, { recursive: true })
     await writeExpert(installed, 'local-only')
 
-    const env = setupPlugin({ marketRepoDir: join(root, 'market'), installedDir: installed })
+    const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: installed })
 
-    const res = await env.call('POST', '/experts-management/api/install', { name: 'backend-architect', source: 'market' })
+    const res = await env.call('POST', '/experts-management/api/install', { name: 'backend-architect', source: 'builtin' })
     assert.equal(res.status, 201)
     await stat(join(installed, 'backend-architect', '.codebuddy-plugin', 'plugin.json'))
     await stat(join(installed, 'backend-architect', 'skills', 'fullstack-dev', 'SKILL.md'))
@@ -369,12 +369,12 @@ test('install copies into the dsh library and shadows the market row; delete rem
 
     // 已装后：installed 桶出现且市场行 installed=true；重复安装拒绝
     const list = await env.call('GET', '/experts-management/api')
-    assert.ok(list.payload.installed.some((e) => e.name === 'backend-architect'))
-    assert.ok(list.payload.market.find((e) => e.name === 'backend-architect').installed)
-    const dup = await env.call('POST', '/experts-management/api/install', { name: 'backend-architect', source: 'market' })
+    assert.ok(list.payload.mine.some((e) => e.name === 'backend-architect'))
+    assert.ok(list.payload.builtin.find((e) => e.name === 'backend-architect').installed)
+    const dup = await env.call('POST', '/experts-management/api/install', { name: 'backend-architect', source: 'builtin' })
     assert.equal(dup.status, 400)
     assert.match(dup.payload.error, /already installed/)
-    const over = await env.call('POST', '/experts-management/api/install', { name: 'backend-architect', source: 'market', overwrite: true })
+    const over = await env.call('POST', '/experts-management/api/install', { name: 'backend-architect', source: 'builtin', overwrite: true })
     assert.equal(over.status, 201)
 
     // 删除：仅对 dsh 用户库生效
@@ -391,7 +391,7 @@ test('install copies into the dsh library and shadows the market row; delete rem
   }
 })
 
-// ── Market git sync（稀疏 experts/ 子树）─────────────────────────────────
+// ── Builtin git sync（稀疏 experts/ 子树）─────────────────────────────────
 
 const git = (args, cwd) => new Promise((fulfil, reject) => {
   execFileCb('git', args, { cwd }, (error, stdout, stderr) => {
@@ -412,7 +412,7 @@ async function makeRemoteRepo(dir) {
   await git(['commit', '-qm', 'init'], dir)
 }
 
-test('market sync sparse-clones only the experts subtree; runtime repoDir switch follows', async () => {
+test('builtin sync sparse-clones only the experts subtree; runtime repoDir switch follows', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-experts-sync-'))
   try {
     const remote = join(root, 'remote')
@@ -421,11 +421,11 @@ test('market sync sparse-clones only the experts subtree; runtime repoDir switch
 
     const env = setupPlugin({
       installedDir: join(root, 'installed'),
-      marketRepoDir: local,
-      marketSync: { url: remote, branch: 'main', syncOnStartup: false, autoSync: false },
+      builtinRepoDir: local,
+      builtinSync: { url: remote, branch: 'main', syncOnStartup: false, autoSync: false },
     })
 
-    const first = await env.call('POST', '/experts-management/api/market/sync')
+    const first = await env.call('POST', '/experts-management/api/builtin/sync')
     assert.equal(first.status, 200)
     assert.equal(first.payload.isFirstClone, true)
     // experts 子树落地；skills/templates 被稀疏排除
@@ -433,24 +433,24 @@ test('market sync sparse-clones only the experts subtree; runtime repoDir switch
     await assert.rejects(stat(join(local, 'skills')))
     await assert.rejects(stat(join(local, 'templates')))
 
-    const st = await env.call('GET', '/experts-management/api/market/status')
+    const st = await env.call('GET', '/experts-management/api/builtin/status')
     assert.equal(st.status, 200)
     assert.deepEqual(st.payload.sparsePaths, ['experts'])
     assert.equal(st.payload.repoExists, true)
 
     // 市场专家可见可装
     const list = await env.call('GET', '/experts-management/api')
-    assert.ok(list.payload.market.some((e) => e.name === 'backend-architect'))
+    assert.ok(list.payload.builtin.some((e) => e.name === 'backend-architect'))
 
     // 远端更新 → fetch+reset 照常
     await writeExpert(join(remote, 'experts'), 'second-expert')
     await git(['add', '-A'], remote)
     await git(['commit', '-qm', 'add second'], remote)
-    const second = await env.call('POST', '/experts-management/api/market/sync')
+    const second = await env.call('POST', '/experts-management/api/builtin/sync')
     assert.equal(second.status, 200)
     assert.equal(second.payload.hasUpdates, true)
     const list2 = await env.call('GET', '/experts-management/api')
-    assert.ok(list2.payload.market.some((e) => e.name === 'second-expert'))
+    assert.ok(list2.payload.builtin.some((e) => e.name === 'second-expert'))
   } finally {
     await rm(root, { recursive: true, force: true })
   }

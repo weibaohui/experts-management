@@ -66,7 +66,7 @@ test('expert trigger source: candidates filtered by query, section replaces grou
   const realFetch = globalThis.fetch
   globalThis.fetch = async () => ({
     ok: true,
-    json: async () => ({ installed: [{ name: 'backend-architect', description: '后端', expertType: 'agent' }], market: [] }),
+    json: async () => ({ mine: [{ name: 'backend-architect', description: '后端', expertType: 'agent' }], builtin: [] }),
   })
   try {
     const source = makeExpertSource(t)
@@ -123,7 +123,7 @@ test('matchExpert searches name/displayName/profession/description/tags', () => 
 })
 
 test('avatarUrl builds the encoded API url, member optional', () => {
-  assert.equal(avatarUrl('backend-architect', 'market'), '/experts-management/api/avatar?name=backend-architect&source=market')
+  assert.equal(avatarUrl('backend-architect', 'builtin'), '/experts-management/api/avatar?name=backend-architect&source=builtin')
   // URLSearchParams 把空格编成 '+'，服务端 URL.searchParams 解码回空格
   assert.equal(avatarUrl('a b', 'extra-src', 'lead-a'), '/experts-management/api/avatar?name=a+b&source=extra-src&member=lead-a')
 })

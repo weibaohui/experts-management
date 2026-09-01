@@ -3,7 +3,7 @@
  *
  * One React app for every surface (settings section; the former sidebar
  *  fullscreen-overlay entry was retired — pair with dsh-settings-ui):
- * expert management page (installed / market views + detail modal + market
+ * expert management page (mine / built-in views + detail modal + built-in
  * sync settings). Plus the composer integration:
  * - an `expert` input-trigger source on `/` (candidates from the plugin's own
  *   HTTP API; pick inserts the literal `/expert-<name> ` token whose send the
@@ -69,11 +69,11 @@ const NS = 'expertsManagement'
 const ZH = {
   title: '专家管理',
   close: '关闭',
-  tabInstalled: '已安装',
-  tabMarket: '市场',
+  tabMine: '我的',
+  tabBuiltin: '内置',
   searchPlaceholder: '搜索专家名称、职业、描述…',
-  installedEmpty: '用户库还没有专家。去「市场」页浏览并安装。',
-  marketEmpty: '市场为空。请在设置中同步市场仓库。',
+  mineEmpty: '用户库还没有专家。去「内置」页浏览并安装。',
+  builtinEmpty: '内置专家为空。请在设置中同步内置仓库。',
   expertTypeAgent: '专家',
   expertTypeTeam: '团队',
   sourceLabel: '来源',
@@ -101,10 +101,10 @@ const ZH = {
   filesLabel: '文件',
   versionLabel: '版本',
   sourceReadonly: '只读来源（可在 NTD 中管理，或安装到用户库）',
-  marketSettings: '市场设置',
+  builtinSettings: '内置设置',
   syncNow: '立即同步',
   syncing: '同步中，可能需要一分钟…',
-  syncDoneUpdated: '同步完成，市场已更新',
+  syncDoneUpdated: '同步完成，内置已更新',
   syncDoneLatest: '已是最新版本',
   firstCloneDone: '首次克隆完成',
   repoUrlLabel: '仓库地址',
@@ -138,11 +138,11 @@ const ZH = {
 const EN = {
   title: 'Expert Management',
   close: 'Close',
-  tabInstalled: 'Installed',
-  tabMarket: 'Market',
+  tabMine: 'Mine',
+  tabBuiltin: 'Built-in',
   searchPlaceholder: 'Search experts by name, profession, description…',
-  installedEmpty: 'No experts in the user library yet. Browse the Market tab and install one.',
-  marketEmpty: 'Market is empty. Sync the market repo in settings.',
+  mineEmpty: 'No experts in the user library yet. Browse the Built-in tab and install one.',
+  builtinEmpty: 'Built-in experts are empty. Sync the built-in repo in settings.',
   expertTypeAgent: 'Expert',
   expertTypeTeam: 'Team',
   sourceLabel: 'Source',
@@ -170,10 +170,10 @@ const EN = {
   filesLabel: 'Files',
   versionLabel: 'Version',
   sourceReadonly: 'Read-only source (manage in NTD, or install into the user library)',
-  marketSettings: 'Market settings',
+  builtinSettings: 'Built-in settings',
   syncNow: 'Sync now',
   syncing: 'Syncing, may take a minute…',
-  syncDoneUpdated: 'Sync complete, market updated',
+  syncDoneUpdated: 'Sync complete, built-in updated',
   syncDoneLatest: 'Already up to date',
   firstCloneDone: 'First clone done',
   repoUrlLabel: 'Repository URL',
@@ -332,8 +332,8 @@ const ROSTER_TTL = 60_000
  * secondary line instead. Rows come out sorted by displayName（中文按拼音），
  * the picker splits them into 专家/专家团 tabs by `team`.
  */
-function toRosterRows(installed, market) {
-  const rows = [...(Array.isArray(installed) ? installed : []), ...(Array.isArray(market) ? market : [])].map((e) => {
+function toRosterRows(mine, builtin) {
+  const rows = [...(Array.isArray(mine) ? mine : []), ...(Array.isArray(builtin) ? builtin : [])].map((e) => {
     const displayName = e.displayName || e.name
     const desc = e.description || e.profession || ''
     return {
@@ -365,9 +365,9 @@ async function fetchRoster(force) {
   if (!force && expertRoster !== null && Date.now() - expertRosterAt < ROSTER_TTL) return expertRoster
   try {
     const data = await fetchJson(API)
-    const installed = Array.isArray(data.installed) ? data.installed : []
-    const market = (Array.isArray(data.market) ? data.market : []).filter((e) => !e.installed)
-    expertRoster = toRosterRows(installed, market)
+    const mine = Array.isArray(data.mine) ? data.mine : []
+    const builtin = (Array.isArray(data.builtin) ? data.builtin : []).filter((e) => !e.installed)
+    expertRoster = toRosterRows(mine, builtin)
     expertRosterAt = Date.now()
     for (const listener of [...rosterListeners]) { try { listener() } catch {} }
   } catch { /* 菜单失败静默：候选组保持 pending/缺席 */ }
@@ -705,16 +705,16 @@ function DetailModal({ name, source, t, onClose, onInstalled, onDeleted }) {
       ) : null))
 }
 
-function MarketSettingsDialog({ t, onClose, onToast, onSynced }) {
+function BuiltinSettingsDialog({ t, onClose, onToast, onSynced }) {
   const [status, setStatus] = useState(null)
   const [form, setForm] = useState(null)
   const [busy, setBusy] = useState(false)
-  const load = () => fetchJson(`${API}/market/status`).then((s) => { setStatus(s); setForm((f) => f ?? { url: s.url, branch: s.branch, repoDir: s.dir, token: '', autoSync: s.autoSync, syncOnStartup: s.syncOnStartup }) })
+  const load = () => fetchJson(`${API}/builtin/status`).then((s) => { setStatus(s); setForm((f) => f ?? { url: s.url, branch: s.branch, repoDir: s.dir, token: '', autoSync: s.autoSync, syncOnStartup: s.syncOnStartup }) })
   useEffect(() => { load() }, [])
   const sync = async () => {
     setBusy(true)
     try {
-      const r = await fetchJson(`${API}/market/sync`, { method: 'POST' })
+      const r = await fetchJson(`${API}/builtin/sync`, { method: 'POST' })
       onToast(r.isFirstClone ? t('firstCloneDone') : r.hasUpdates ? t('syncDoneUpdated') : t('syncDoneLatest'))
       await load()
       onSynced()
@@ -728,7 +728,7 @@ function MarketSettingsDialog({ t, onClose, onToast, onSynced }) {
       const dirText = (form.repoDir || '').trim()
       if (dirText !== '' && dirText !== (status && status.dir)) patch.repoDir = dirText
       if (typeof form.token === 'string' && form.token !== '') patch.token = form.token
-      await fetchJson(`${API}/market/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+      await fetchJson(`${API}/builtin/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
       setForm((f) => ({ ...f, token: '' }))
       onToast(t('saved'))
       await load()
@@ -738,7 +738,7 @@ function MarketSettingsDialog({ t, onClose, onToast, onSynced }) {
   const clearToken = async () => {
     setBusy(true)
     try {
-      await fetchJson(`${API}/market/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: null }) })
+      await fetchJson(`${API}/builtin/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: null }) })
       onToast(t('saved'))
       await load()
     } catch (e) { onToast(String(e && e.message)) }
@@ -752,7 +752,7 @@ function MarketSettingsDialog({ t, onClose, onToast, onSynced }) {
   return h('div', { className: 'exp-modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) onClose() } },
     h('div', { className: 'exp-modal', style: { maxWidth: 640 } },
       h('div', { className: 'exp-modal-head' },
-        h('span', { className: 'exp-title' }, t('marketSettings')),
+        h('span', { className: 'exp-title' }, t('builtinSettings')),
         h('button', { className: 'exp-btn exp-modal-close', onClick: onClose }, t('close'))),
       status === null ? h('div', { className: 'exp-empty' }, '…')
         : h('div', { style: { display: 'contents' } },
@@ -788,7 +788,7 @@ function MarketSettingsDialog({ t, onClose, onToast, onSynced }) {
 // ── Page ─────────────────────────────────────────────────────────────────
 
 function ExpertsPage({ t, embedded, onClose }) {
-  const [tab, setTab] = useState('market')
+  const [tab, setTab] = useState('builtin')
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
@@ -802,7 +802,7 @@ function ExpertsPage({ t, embedded, onClose }) {
   const rows = useMemo(() => {
     if (!data) return []
     const lower = search.trim().toLowerCase()
-    const list = tab === 'installed' ? data.installed : data.market
+    const list = tab === 'mine' ? data.mine : data.builtin
     return list.filter((e) => matchExpert(e, lower))
   }, [data, tab, search])
   const install = async (row) => {
@@ -839,13 +839,13 @@ function ExpertsPage({ t, embedded, onClose }) {
       h('button', { className: 'exp-btn', onClick: () => { if (onClose) onClose() } }, t('close'))) : null,
     h('div', { className: 'exp-toolbar' },
       h('div', { className: 'exp-tabs' },
-        h('button', { className: 'exp-tab', 'data-on': tab === 'installed', onClick: () => setTab('installed') }, `${t('tabInstalled')}${data ? ` (${data.installed.length})` : ''}`),
-        h('button', { className: 'exp-tab', 'data-on': tab === 'market', onClick: () => setTab('market') }, `${t('tabMarket')}${data ? ` (${data.market.length})` : ''}`)),
+        h('button', { className: 'exp-tab', 'data-on': tab === 'mine', onClick: () => setTab('mine') }, `${t('tabMine')}${data ? ` (${data.mine.length})` : ''}`),
+        h('button', { className: 'exp-tab', 'data-on': tab === 'builtin', onClick: () => setTab('builtin') }, `${t('tabBuiltin')}${data ? ` (${data.builtin.length})` : ''}`)),
       h('input', { className: 'exp-input exp-search', placeholder: t('searchPlaceholder'), value: search, onChange: (e) => setSearch(e.target.value) }),
       h('span', { className: 'exp-count' }, `${rows.length}`),
-      tab === 'market' ? h('button', { className: 'exp-btn', title: t('marketSettings'), onClick: () => setSettingsOpen(true) }, t('marketSettings')) : null),
+      tab === 'builtin' ? h('button', { className: 'exp-btn', title: t('builtinSettings'), onClick: () => setSettingsOpen(true) }, t('builtinSettings')) : null),
     error !== '' ? h('div', { className: 'exp-empty' }, `${t('loadFailed')}: ${error}`) : null,
-    data !== null && rows.length === 0 ? h('div', { className: 'exp-empty' }, tab === 'installed' ? t('installedEmpty') : t('marketEmpty')) : null,
+    data !== null && rows.length === 0 ? h('div', { className: 'exp-empty' }, tab === 'mine' ? t('mineEmpty') : t('builtinEmpty')) : null,
     rows.length > 0
       ? h(PagedGrid, {
           items: rows,
@@ -857,7 +857,7 @@ function ExpertsPage({ t, embedded, onClose }) {
       onInstalled: () => { setSelected(null); showToast(t('installedDone')); reload() },
       onDeleted: () => { setSelected(null); showToast(t('removedDone')); reload() },
     }) : null,
-    settingsOpen ? h(MarketSettingsDialog, {
+    settingsOpen ? h(BuiltinSettingsDialog, {
       t, onClose: () => setSettingsOpen(false), onToast: showToast, onSynced: reload,
     }) : null,
     toast !== null ? h('div', { className: 'exp-toast' }, toast) : null)
