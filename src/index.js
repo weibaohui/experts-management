@@ -5,8 +5,8 @@
  *
  * Manages ntd-format experts (WorkBuddy plugin.json + Agent MD + skills)
  * WITHOUT touching the ntd application's own directories:
- * - Market: ntd-resource's experts/ subtree via git sparse checkout into the
- *   plugin's own dir ($DSH_HOME/experts-management/market). Read-only shelf;
+ * - Builtin: ntd-resource's experts/ subtree via git sparse checkout into the
+ *   plugin's own dir ($DSH_HOME/experts-management/builtin). Read-only shelf;
  *   install copies into the user library.
  * - User library: $DSH_HOME/experts (writable, the only built-in source).
  *   Additional directories are opt-in via config.extraSources.
@@ -46,9 +46,9 @@ function dshHome() {
   return process.env.DSH_HOME ? resolve(process.env.DSH_HOME) : join(homedir(), '.dsh')
 }
 
-const MARKET_SCAN_SKIP = new Set(['.git', 'node_modules'])
+const BUILTIN_SCAN_SKIP = new Set(['.git', 'node_modules'])
 const RANK_INSTALLED = 100
-const RANK_MARKET = 500
+const RANK_BUILTIN = 500
 const MAX_BODY_BYTES = 64 * 1024
 const DESCRIPTION_LIMIT = 140
 // 同款正则见 skill/skill/src/index.ts SKILL_NAME —— 不合规的候选会让 registry 抛错
@@ -226,7 +226,7 @@ async function scanExpertsRoot(root, sourceKey) {
   try { entries = await fsP.readdir(root, { withFileTypes: true }) } catch { return { experts, errors } }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    if (MARKET_SCAN_SKIP.has(entry.name)) continue
+    if (BUILTIN_SCAN_SKIP.has(entry.name)) continue
     const dir = join(root, entry.name)
     try {
       experts.push(await readExpertDir(root, dir, sourceKey))
@@ -418,7 +418,7 @@ async function atomicWriteJs(file, content) {
   await fsP.rename(temp, file)
 }
 
-// ── Market git sync（与 skills-management 同款；稀疏检出 experts/ 子树）──
+// ── Builtin git sync（与 skills-management 同款管线；稀疏检出 experts/ 子树）──
 
 function gitExec(binary, args, cwd) {
   return new Promise((fulfil, reject) => {
@@ -481,7 +481,7 @@ async function gitSyncRepo(binary, url, branch, repoDir, token, sparsePaths) {
   return { isFirstClone: false, hasUpdates: before !== after, before, after }
 }
 
-const DEFAULT_MARKET_SYNC = {
+const DEFAULT_BUILTIN_SYNC = {
   url: 'https://gitcode.com/weibaohui/ntd-resource.git',
   branch: 'main',
   gitBinary: 'git',
@@ -489,11 +489,11 @@ const DEFAULT_MARKET_SYNC = {
   syncOnStartup: true,
 }
 // ntd-resource 同时携带 skills（~400MB），专家市场只稀疏检出 experts/ 子树
-const DEFAULT_MARKET_SPARSE_PATHS = ['experts']
+const DEFAULT_BUILTIN_SPARSE_PATHS = ['experts']
 
-const MARKET_SETTINGS_NS = 'experts-management-market'
+const BUILTIN_SETTINGS_NS = 'experts-management-builtin'
 
-function marketSettingsSchema() {
+function builtinSettingsSchema() {
   if (!Schema) return null
   return Schema.object({
     url: Schema.string(),
@@ -507,12 +507,12 @@ function marketSettingsSchema() {
 }
 
 function baseSettings(config) {
-  const cfg = (config.marketSync && typeof config.marketSync === 'object') ? config.marketSync : {}
-  const base = { ...DEFAULT_MARKET_SYNC }
+  const cfg = (config.builtinSync && typeof config.builtinSync === 'object') ? config.builtinSync : {}
+  const base = { ...DEFAULT_BUILTIN_SYNC }
   for (const key of ['url', 'branch', 'gitBinary', 'autoSync', 'syncOnStartup']) {
     if (cfg[key] !== undefined) base[key] = cfg[key]
   }
-  if (config.marketRepoDir !== undefined) base.repoDir = resolve(String(config.marketRepoDir))
+  if (config.builtinRepoDir !== undefined) base.repoDir = resolve(String(config.builtinRepoDir))
   return base
 }
 
@@ -561,43 +561,59 @@ module.exports = {
     // git 市场检出（稀疏 experts/ 子树）也是一路来源：root 运行期可变，按调用时解析
     const allSourceRows = () => [
       ...sourceRows,
-      { key: 'market', label: '专家市场', root: join(marketRootDir(), 'experts'), readOnly: true },
+      { key: 'builtin', label: '内置', root: join(builtinRootDir(), 'experts'), readOnly: true },
     ]
 
     // ── Market sync state / settings（skills-management 同款管线）────────
-    const marketRootDir = () => {
-      const eff = marketSettings()
+    const builtinRootDir = () => {
+      const eff = builtinSettings()
       return resolve(typeof eff.repoDir === 'string' && eff.repoDir !== '' ? eff.repoDir
-        : config.marketRepoDir !== undefined ? resolve(String(config.marketRepoDir))
-        : join(dshHome(), 'experts-management', 'market'))
+        : config.builtinRepoDir !== undefined ? resolve(String(config.builtinRepoDir))
+        : join(dshHome(), 'experts-management', 'builtin'))
     }
-    const marketSparsePaths = () => config.marketSparsePaths === null
+    const builtinSparsePaths = () => config.builtinSparsePaths === null
       ? undefined
-      : (Array.isArray(config.marketSparsePaths) && config.marketSparsePaths.length > 0 ? config.marketSparsePaths.map(String) : DEFAULT_MARKET_SPARSE_PATHS)
+      : (Array.isArray(config.builtinSparsePaths) && config.builtinSparsePaths.length > 0 ? config.builtinSparsePaths.map(String) : DEFAULT_BUILTIN_SPARSE_PATHS)
 
-    const marketStateFile = join(dshHome(), 'experts-management', 'market-sync.json')
-    let marketState = { lastSyncAt: undefined, lastResult: undefined }
+        // v0.1 → v0.2 落盘迁移：market 命名 → builtin（检出目录 + 同步状态文件）
+    const migrateV1Layout = async () => {
+      const base = join(dshHome(), 'experts-management')
+      for (const [oldName, newName] of [['market', 'builtin'], ['market-sync.json', 'builtin-sync.json']]) {
+        const from = join(base, oldName)
+        const to = join(base, newName)
+        try {
+          await fsP.access(from)
+          try { await fsP.access(to); continue } catch {}
+          await fsP.rename(from, to)
+          ctx.logger.info && ctx.logger.info(`experts-management: migrated ${oldName} → ${newName}`)
+        } catch { /* 旧布局不存在：跳过 */ }
+      }
+    }
+    const builtinStateFile = join(dshHome(), 'experts-management', 'builtin-sync.json')
+    let builtinState = { lastSyncAt: undefined, lastResult: undefined }
     let settingsScope = null
     const settingsOverrides = {}  // fallback sheet when the settings service is absent
-    const marketStateLoaded = fsP.readFile(marketStateFile, 'utf8')
-      .then(raw => {
-        const parsed = JSON.parse(raw)
-        marketState = { lastSyncAt: parsed.lastSyncAt, lastResult: parsed.lastResult }
+    const builtinStateLoaded = migrateV1Layout()
+      .then(() => fsP.readFile(builtinStateFile, 'utf8'))
+      .then((raw) => {
+        let parsed
+        try { parsed = JSON.parse(raw) } catch { parsed = null }
+        if (parsed) builtinState = { lastSyncAt: parsed.lastSyncAt, lastResult: parsed.lastResult }
       })
       .catch(() => {})
     if (Schema && ctx.settings && typeof ctx.settings.register === 'function') {
       try {
-        settingsScope = ctx.settings.register(MARKET_SETTINGS_NS, marketSettingsSchema(), { base: baseSettings(config) })
+        settingsScope = ctx.settings.register(BUILTIN_SETTINGS_NS, builtinSettingsSchema(), { base: baseSettings(config) })
       } catch (e) { ctx.logger.warn(`experts-management: settings register: ${e && e.message}`) }
     }
-    const saveMarketState = async () => {
+    const saveBuiltinState = async () => {
       try {
-        await fsP.mkdir(join(marketStateFile, '..'), { recursive: true })
-        await atomicWriteJs(marketStateFile, JSON.stringify(marketState, null, 2))
-        await fsP.chmod(marketStateFile, 0o600)
+        await fsP.mkdir(join(builtinStateFile, '..'), { recursive: true })
+        await atomicWriteJs(builtinStateFile, JSON.stringify(builtinState, null, 2))
+        await fsP.chmod(builtinStateFile, 0o600)
       } catch {}
     }
-    const marketSettings = () => {
+    const builtinSettings = () => {
       if (settingsScope && typeof settingsScope.get === 'function') {
         const v = settingsScope.get()
         if (v && typeof v === 'object') return { ...baseSettings(config), ...v }
@@ -605,55 +621,55 @@ module.exports = {
       return { ...baseSettings(config), ...settingsOverrides }
     }
 
-    let marketSyncRun = null
-    const runMarketSync = async () => {
-      if (marketSyncRun !== null) return marketSyncRun
-      marketSyncRun = (async () => {
-        await marketStateLoaded
-        const eff = marketSettings()
+    let builtinSyncRun = null
+    const runBuiltinSync = async () => {
+      if (builtinSyncRun !== null) return builtinSyncRun
+      builtinSyncRun = (async () => {
+        await builtinStateLoaded
+        const eff = builtinSettings()
         const ok = await gitAvailable(eff.gitBinary)
         if (!ok) throw new Error('git is not available on PATH')
         const started = Date.now()
-        const repoDir = marketRootDir()
-        const result = await gitSyncRepo(eff.gitBinary, eff.url, eff.branch, repoDir, eff.token, marketSparsePaths())
-        marketState.lastSyncAt = new Date().toISOString()
-        marketState.lastResult = { ...result, at: marketState.lastSyncAt, durationMs: Date.now() - started }
-        await saveMarketState()
+        const repoDir = builtinRootDir()
+        const result = await gitSyncRepo(eff.gitBinary, eff.url, eff.branch, repoDir, eff.token, builtinSparsePaths())
+        builtinState.lastSyncAt = new Date().toISOString()
+        builtinState.lastResult = { ...result, at: builtinState.lastSyncAt, durationMs: Date.now() - started }
+        await saveBuiltinState()
         invalidate()
-        return { ...marketState.lastResult, url: eff.url, branch: eff.branch, dir: repoDir }
-      })().finally(() => { marketSyncRun = null })
-      return marketSyncRun
+        return { ...builtinState.lastResult, url: eff.url, branch: eff.branch, dir: repoDir }
+      })().finally(() => { builtinSyncRun = null })
+      return builtinSyncRun
     }
 
     // Startup + periodic auto-sync (fire-and-forget; failures only warn)
     ctx.effect(() => {
-      const eff = marketSettings()
+      const eff = builtinSettings()
       if (eff.syncOnStartup) {
-        marketStateLoaded.then(() => runMarketSync()).catch(e => ctx.logger.warn(`experts-management: startup market sync: ${e && e.message}`))
+        builtinStateLoaded.then(() => runBuiltinSync()).catch(e => ctx.logger.warn(`experts-management: startup builtin sync: ${e && e.message}`))
       }
       const timer = setInterval(() => {
-        const eff2 = marketSettings()
+        const eff2 = builtinSettings()
         if (!eff2.autoSync) return
-        const last = marketState.lastSyncAt ? Date.parse(marketState.lastSyncAt) : 0
+        const last = builtinState.lastSyncAt ? Date.parse(builtinState.lastSyncAt) : 0
         if (Date.now() - last > 24 * 3600 * 1000) {
-          runMarketSync().catch(e => ctx.logger.warn(`experts-management: auto market sync: ${e && e.message}`))
+          runBuiltinSync().catch(e => ctx.logger.warn(`experts-management: auto builtin sync: ${e && e.message}`))
         }
       }, 6 * 3600 * 1000)
       if (typeof timer.unref === 'function') timer.unref()
       return () => clearInterval(timer)
-    }, 'experts-management: market auto-sync')
+    }, 'experts-management: builtin auto-sync')
 
     // ── Discovery ────────────────────────────────────────────────────────
     async function discoverAll() {
-      const installed = [], market = []
+      const mine = [], builtin = []
       const errors = []
       for (const row of allSourceRows()) {
         const { experts, errors: errs } = await scanExpertsRoot(row.root, row.key)
         errors.push(...errs)
-        if (row.key === 'dsh') installed.push(...experts)
-        else market.push(...experts)
+        if (row.key === 'dsh') mine.push(...experts)
+        else builtin.push(...experts)
       }
-      return { installed, market, errors }
+      return { mine, builtin, errors }
     }
 
     async function locateExpert(name, sourceKey) {
@@ -681,7 +697,7 @@ module.exports = {
       return {
         name: providerName,
         async list() {
-          const { installed, market } = await discoverAll()
+          const { mine, builtin } = await discoverAll()
           const candidates = []
           const seen = new Set()
           // 专家一律 modelInvocable:false：不进模型目录（零 token 污染），
@@ -713,11 +729,11 @@ module.exports = {
               metadata: { expertType: e.expertType, profession: e.professionZh ?? e.professionEn, version: e.version },
             })
           }
-          for (const e of installed) push(e, 'user-installed', RANK_INSTALLED)
-          const installedNames = new Set(installed.map((e) => e.name))
-          for (const e of market) {
-            if (installedNames.has(e.name)) continue // 用户库覆盖市场同名专家
-            push(e, 'market', RANK_MARKET)
+          for (const e of mine) push(e, 'user-installed', RANK_INSTALLED)
+          const mineNames = new Set(mine.map((e) => e.name))
+          for (const e of builtin) {
+            if (mineNames.has(e.name)) continue // 用户库覆盖内置同名专家
+            push(e, 'builtin', RANK_BUILTIN)
           }
           return candidates
         },
@@ -767,10 +783,10 @@ module.exports = {
           const apiPath = url.pathname.replace(/\/+$/, '')
           const query = url.searchParams
 
-          // GET /experts-management/api → { sources, installed, market }
+          // GET /experts-management/api → { sources, mine, builtin }
           if (req.method === 'GET' && apiPath === '/experts-management/api') {
-            const { installed, market, errors } = await discoverAll()
-            const installedNames = new Set(installed.map((e) => e.name))
+            const { mine, builtin, errors } = await discoverAll()
+            const mineNames = new Set(mine.map((e) => e.name))
             const summarize = (e) => ({
               name: e.name,
               displayName: e.displayNameZh ?? e.displayNameEn ?? e.name,
@@ -780,13 +796,13 @@ module.exports = {
               tags: e.tags.filter((t) => t.zh || t.en).map((t) => t.zh || t.en),
               hasAvatar: e.avatar !== undefined,
               source: e.source,
-              installed: installedNames.has(e.name),
+              installed: mineNames.has(e.name),
               mtime: e.mtime,
             })
             sendJson(res, 200, {
               sources: allSourceRows().map((row) => ({ key: row.key, label: row.label, dir: displayPath(row.root), readOnly: row.readOnly })),
-              installed: installed.map(summarize),
-              market: market.map(summarize),
+              mine: mine.map(summarize),
+              builtin: builtin.map(summarize),
               errors,
             })
             return
@@ -854,7 +870,7 @@ module.exports = {
           if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/install')) {
             const body = await readJsonBody(req)
             if (typeof body.name !== 'string' || body.name === '') { sendJson(res, 400, { error: 'body must provide name' }); return }
-            const { expert } = await locateExpert(body.name, typeof body.from === 'string' && body.from !== '' && body.from !== 'market' ? body.from : undefined)
+            const { expert } = await locateExpert(body.name, typeof body.from === 'string' && body.from !== '' && body.from !== 'builtin' ? body.from : undefined)
             if (!isSafeExpertName(expert.name)) throw new Error(`invalid expert name: ${expert.name}`)
             const target = join(installedDir, expert.name)
             if (body.overwrite !== true) {
@@ -883,11 +899,11 @@ module.exports = {
             return
           }
 
-          // GET /experts-management/api/market/status
-          if (req.method === 'GET' && apiPath.endsWith('/experts-management/api/market/status')) {
-            await marketStateLoaded
-            const eff = marketSettings()
-            const repoDir = marketRootDir()
+          // GET /experts-management/api/builtin/status
+          if (req.method === 'GET' && apiPath.endsWith('/experts-management/api/builtin/status')) {
+            await builtinStateLoaded
+            const eff = builtinSettings()
+            const repoDir = builtinRootDir()
             const repoExists = await fsP.access(join(repoDir, '.git')).then(() => true).catch(() => false)
             const ok = await gitAvailable(eff.gitBinary)
             const [localCommit, remoteCommit] = repoExists && ok
@@ -898,28 +914,28 @@ module.exports = {
               gitAvailable: ok, repoExists,
               localCommit, remoteCommit,
               needsUpdate: localCommit !== undefined && remoteCommit !== undefined ? localCommit !== remoteCommit : undefined,
-              lastSyncAt: marketState.lastSyncAt, lastResult: marketState.lastResult,
+              lastSyncAt: builtinState.lastSyncAt, lastResult: builtinState.lastResult,
               autoSync: eff.autoSync, syncOnStartup: eff.syncOnStartup,
               hasToken: typeof eff.token === 'string' && eff.token !== '',
-              syncing: marketSyncRun !== null,
-              sparsePaths: marketSparsePaths() ?? null,
+              syncing: builtinSyncRun !== null,
+              sparsePaths: builtinSparsePaths() ?? null,
             })
             return
           }
 
-          // POST /experts-management/api/market/sync
-          if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/market/sync')) {
+          // POST /experts-management/api/builtin/sync
+          if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/builtin/sync')) {
             try {
-              const result = await runMarketSync()
+              const result = await runBuiltinSync()
               sendJson(res, 200, result)
             } catch (e) { sendJson(res, 400, { error: String(e && e.message || e) }) }
             return
           }
 
-          // PUT /experts-management/api/market/settings {url?, branch?, repoDir?, token?, autoSync?, syncOnStartup?}
-          if (req.method === 'PUT' && apiPath.endsWith('/experts-management/api/market/settings')) {
+          // PUT /experts-management/api/builtin/settings {url?, branch?, repoDir?, token?, autoSync?, syncOnStartup?}
+          if (req.method === 'PUT' && apiPath.endsWith('/experts-management/api/builtin/settings')) {
             const body = await readJsonBody(req)
-            await marketStateLoaded
+            await builtinStateLoaded
             const patch = {}
             for (const key of ['url', 'branch', 'gitBinary']) {
               if (typeof body[key] === 'string' && body[key] !== '') patch[key] = body[key]
@@ -935,7 +951,7 @@ module.exports = {
             } else {
               Object.assign(settingsOverrides, patch)
             }
-            const eff = marketSettings()
+            const eff = builtinSettings()
             const { token, ...safe } = eff  // token 只写不回读
             sendJson(res, 200, { settings: safe, hasToken: typeof token === 'string' && token !== '' })
             return

@@ -332,8 +332,8 @@ const ROSTER_TTL = 60_000
  * secondary line instead. Rows come out sorted by displayName（中文按拼音），
  * the picker splits them into 专家/专家团 tabs by `team`.
  */
-function toRosterRows(installed, market) {
-  const rows = [...(Array.isArray(installed) ? installed : []), ...(Array.isArray(market) ? market : [])].map((e) => {
+function toRosterRows(mine, builtin) {
+  const rows = [...(Array.isArray(mine) ? mine : []), ...(Array.isArray(builtin) ? builtin : [])].map((e) => {
     const displayName = e.displayName || e.name
     const desc = e.description || e.profession || ''
     return {
@@ -365,9 +365,9 @@ async function fetchRoster(force) {
   if (!force && expertRoster !== null && Date.now() - expertRosterAt < ROSTER_TTL) return expertRoster
   try {
     const data = await fetchJson(API)
-    const installed = Array.isArray(data.installed) ? data.installed : []
-    const market = (Array.isArray(data.market) ? data.market : []).filter((e) => !e.installed)
-    expertRoster = toRosterRows(installed, market)
+    const mine = Array.isArray(data.mine) ? data.mine : []
+    const builtin = (Array.isArray(data.builtin) ? data.builtin : []).filter((e) => !e.installed)
+    expertRoster = toRosterRows(mine, builtin)
     expertRosterAt = Date.now()
     for (const listener of [...rosterListeners]) { try { listener() } catch {} }
   } catch { /* 菜单失败静默：候选组保持 pending/缺席 */ }
@@ -709,12 +709,12 @@ function BuiltinSettingsDialog({ t, onClose, onToast, onSynced }) {
   const [status, setStatus] = useState(null)
   const [form, setForm] = useState(null)
   const [busy, setBusy] = useState(false)
-  const load = () => fetchJson(`${API}/market/status`).then((s) => { setStatus(s); setForm((f) => f ?? { url: s.url, branch: s.branch, repoDir: s.dir, token: '', autoSync: s.autoSync, syncOnStartup: s.syncOnStartup }) })
+  const load = () => fetchJson(`${API}/builtin/status`).then((s) => { setStatus(s); setForm((f) => f ?? { url: s.url, branch: s.branch, repoDir: s.dir, token: '', autoSync: s.autoSync, syncOnStartup: s.syncOnStartup }) })
   useEffect(() => { load() }, [])
   const sync = async () => {
     setBusy(true)
     try {
-      const r = await fetchJson(`${API}/market/sync`, { method: 'POST' })
+      const r = await fetchJson(`${API}/builtin/sync`, { method: 'POST' })
       onToast(r.isFirstClone ? t('firstCloneDone') : r.hasUpdates ? t('syncDoneUpdated') : t('syncDoneLatest'))
       await load()
       onSynced()
@@ -728,7 +728,7 @@ function BuiltinSettingsDialog({ t, onClose, onToast, onSynced }) {
       const dirText = (form.repoDir || '').trim()
       if (dirText !== '' && dirText !== (status && status.dir)) patch.repoDir = dirText
       if (typeof form.token === 'string' && form.token !== '') patch.token = form.token
-      await fetchJson(`${API}/market/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+      await fetchJson(`${API}/builtin/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
       setForm((f) => ({ ...f, token: '' }))
       onToast(t('saved'))
       await load()
@@ -738,7 +738,7 @@ function BuiltinSettingsDialog({ t, onClose, onToast, onSynced }) {
   const clearToken = async () => {
     setBusy(true)
     try {
-      await fetchJson(`${API}/market/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: null }) })
+      await fetchJson(`${API}/builtin/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: null }) })
       onToast(t('saved'))
       await load()
     } catch (e) { onToast(String(e && e.message)) }
@@ -802,7 +802,7 @@ function ExpertsPage({ t, embedded, onClose }) {
   const rows = useMemo(() => {
     if (!data) return []
     const lower = search.trim().toLowerCase()
-    const list = tab === 'mine' ? data.installed : data.market
+    const list = tab === 'mine' ? data.mine : data.builtin
     return list.filter((e) => matchExpert(e, lower))
   }, [data, tab, search])
   const install = async (row) => {
@@ -839,8 +839,8 @@ function ExpertsPage({ t, embedded, onClose }) {
       h('button', { className: 'exp-btn', onClick: () => { if (onClose) onClose() } }, t('close'))) : null,
     h('div', { className: 'exp-toolbar' },
       h('div', { className: 'exp-tabs' },
-        h('button', { className: 'exp-tab', 'data-on': tab === 'mine', onClick: () => setTab('mine') }, `${t('tabMine')}${data ? ` (${data.installed.length})` : ''}`),
-        h('button', { className: 'exp-tab', 'data-on': tab === 'builtin', onClick: () => setTab('builtin') }, `${t('tabBuiltin')}${data ? ` (${data.market.length})` : ''}`)),
+        h('button', { className: 'exp-tab', 'data-on': tab === 'mine', onClick: () => setTab('mine') }, `${t('tabMine')}${data ? ` (${data.mine.length})` : ''}`),
+        h('button', { className: 'exp-tab', 'data-on': tab === 'builtin', onClick: () => setTab('builtin') }, `${t('tabBuiltin')}${data ? ` (${data.builtin.length})` : ''}`)),
       h('input', { className: 'exp-input exp-search', placeholder: t('searchPlaceholder'), value: search, onChange: (e) => setSearch(e.target.value) }),
       h('span', { className: 'exp-count' }, `${rows.length}`),
       tab === 'builtin' ? h('button', { className: 'exp-btn', title: t('builtinSettings'), onClick: () => setSettingsOpen(true) }, t('builtinSettings')) : null),
