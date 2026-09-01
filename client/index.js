@@ -7,8 +7,11 @@
  * - an `expert` input-trigger source on `/` (candidates from the plugin's own
  *   HTTP API; pick inserts the literal `/expert-<name> ` token whose send the
  *   host's user-explicit gesture boundary turns into the expert prompt), and
- * - a `＋专家` button in the composer tool row (`conversation.input.left`)
- *   that opens exactly that source via the per-session `toggleSource`.
+ * - a `＋ 专家` button in the composer tool row (`conversation.input.left`)
+ *   that opens the plugin's own searchable picker popover (the host slash menu
+ *   filters only by a typed query, which a button click cannot provide); the
+ *   pick is written into the draft through the same scoped
+ *   `slash/input-insert-text` event the host menu uses.
  *
  * All interactive controls are host primitives
  * (@deepseek-ai/dsh-client-ui-primitives); all colors come from the ui-theme
@@ -63,7 +66,7 @@ const prim = (name) => P && P[name]
 const NS = 'expertsManagement'
 
 const ZH = {
-  title: '专家市场',
+  title: '专家管理',
   close: '关闭',
   tabInstalled: '已安装',
   tabMarket: '市场',
@@ -123,12 +126,16 @@ const ZH = {
   noDescription: '暂无描述',
   avatarLoadFailed: '头像加载失败',
   menuGroup: '专家',
-  pickExpert: '＋专家',
+  pickExpert: '＋ 专家',
   pickExpertTitle: '选择一位专家，以该专家的身份执行本条任务',
+  pickerLoading: '正在加载专家目录…',
+  pickerEmpty: '没有匹配的专家',
+  pickerTabAgents: '专家',
+  pickerTabTeams: '专家团',
 }
 
 const EN = {
-  title: 'Expert Market',
+  title: 'Expert Management',
   close: 'Close',
   tabInstalled: 'Installed',
   tabMarket: 'Market',
@@ -190,11 +197,15 @@ const EN = {
   menuGroup: 'Experts',
   pickExpert: '+ Expert',
   pickExpertTitle: 'Pick an expert to handle this message in their persona',
+  pickerLoading: 'Loading experts…',
+  pickerEmpty: 'No matching experts',
+  pickerTabAgents: 'Experts',
+  pickerTabTeams: 'Teams',
 }
 
 // ── Styles ───────────────────────────────────────────────────────────────
 
-const STYLE = `
+const STYLE = `<style>
 .exp-page{position:relative;display:flex;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:var(--dsw-font-sm-14,14px)}
 .exp-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .exp-tabs{display:flex;gap:4px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:3px}
@@ -238,7 +249,6 @@ const STYLE = `
 .exp-member-avatar{width:32px;height:32px;border-radius:8px;object-fit:cover;background:var(--dsw-alias-bg-layer-3)}
 .exp-skill-row{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .exp-skill-row:last-child{border-bottom:0}
-.exp-settings{display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:14px}
 .exp-form-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .exp-form-row label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dsw-alias-label-secondary);flex:1;min-width:160px}
 .exp-input{background:var(--dsw-alias-specific-input-major);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;width:100%}
@@ -248,7 +258,23 @@ const STYLE = `
 .exp-checkline input{accent-color:var(--dsw-alias-brand-primary)}
 .exp-chip{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 9px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
 .exp-chip:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-`
+.exp-picker-backdrop{position:fixed;inset:0;z-index:2147483200}
+.exp-picker{position:fixed;z-index:2147483201;width:400px;max-width:92vw;max-height:360px;display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--dsw-specific-menu);border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;box-shadow:var(--dsw-shadow-lv3)}
+.exp-picker-input{flex:none}
+.exp-picker-tabs{flex:none;align-self:flex-start}
+.exp-picker-list{display:flex;flex-direction:column;min-height:40px;overflow-y:auto}
+.exp-picker-row{display:flex;align-items:center;gap:8px;width:100%;min-height:36px;padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;font:inherit;font-size:13px}
+.exp-picker-row[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover)}
+.exp-picker-icon{width:18px;flex:none;text-align:center}
+.exp-picker-name{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.exp-picker-literal{flex:none;max-width:32%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px}
+.exp-picker-desc{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.exp-picker-empty{padding:12px 10px;text-align:center;color:var(--dsw-alias-label-dimmed);font-size:13px}
+.exp-overlay{position:fixed;inset:0;z-index:2147483000;background:var(--dsw-alias-bg-base);overflow:auto;padding:20px 26px}
+.exp-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.exp-title{font-weight:600;font-size:16px}
+.exp-spacer{flex:1}
+</style>`
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -296,17 +322,51 @@ let expertRosterAt = 0
 const rosterListeners = new Set()
 const ROSTER_TTL = 60_000
 
+/**
+ * Roster row mapping (pure, testable). The host slash menu renders only
+ * name + description per row, so the human-readable displayName is prefixed
+ * into the description — expert teams (👥) and single experts both show
+ * their real name next to the `expert-<id>` literal. The picker popover
+ * renders `displayName` as the primary label and `plainDescription` as the
+ * secondary line instead. Rows come out sorted by displayName（中文按拼音），
+ * the picker splits them into 专家/专家团 tabs by `team`.
+ */
+function toRosterRows(installed, market) {
+  const rows = [...(Array.isArray(installed) ? installed : []), ...(Array.isArray(market) ? market : [])].map((e) => {
+    const displayName = e.displayName || e.name
+    const desc = e.description || e.profession || ''
+    return {
+      name: `expert-${e.name}`,
+      displayName,
+      description: displayName && displayName !== e.name ? (desc === '' ? displayName : `${displayName} · ${desc}`) : desc,
+      plainDescription: desc,
+      team: e.expertType === 'team',
+      icon: e.expertType === 'team' ? '👥' : '🧑‍💼',
+    }
+  })
+  rows.sort((a, b) => String(a.displayName).localeCompare(String(b.displayName), 'zh'))
+  return rows
+}
+
+/** Picker tab split (pure, testable): single experts vs expert teams. */
+function splitRosterByType(rows) {
+  const agents = [], teams = []
+  for (const r of Array.isArray(rows) ? rows : []) (r.team ? teams : agents).push(r)
+  return { agents, teams }
+}
+
+/** Picker filter predicate (pure): match the displayed fields, not the `expert-` prefix. */
+function pickerRowMatch(r, lower) {
+  return matchExpert({ name: r.name.replace(/^expert-/, ''), displayName: r.displayName, description: r.plainDescription }, lower)
+}
+
 async function fetchRoster(force) {
   if (!force && expertRoster !== null && Date.now() - expertRosterAt < ROSTER_TTL) return expertRoster
   try {
     const data = await fetchJson(API)
     const installed = Array.isArray(data.installed) ? data.installed : []
     const market = (Array.isArray(data.market) ? data.market : []).filter((e) => !e.installed)
-    expertRoster = [...installed, ...market].map((e) => ({
-      name: `expert-${e.name}`,
-      description: e.description || e.profession || '',
-      icon: e.expertType === 'team' ? '👥' : '🧑‍💼',
-    }))
+    expertRoster = toRosterRows(installed, market)
     expertRosterAt = Date.now()
     for (const listener of [...rosterListeners]) { try { listener() } catch {} }
   } catch { /* 菜单失败静默：候选组保持 pending/缺席 */ }
@@ -346,6 +406,10 @@ function makeExpertSource(t) {
  * end (host toggleCommandMenu 同款调用形状）。The standard kit exposes no
  * caret, so the pick replaces a collapsed span at draft end — picks die
  * quietly on span-CAS if the draft moved since the click.
+ *
+ * NOTE: the ＋ 专家 button no longer uses this — the host menu cannot offer
+ * a search box, so the button opens ExpertPicker instead. Kept for the
+ * contract tests and as the documented toggleSource path.
  */
 function openTriggerSource(composerScope, sessionId, input, sourceName) {
   const inputTriggers = composerScope && composerScope.inputTriggers
@@ -366,6 +430,115 @@ function openTriggerSource(composerScope, sessionId, input, sourceName) {
     span: { start: at, end: at, draftRev: (input && input.draftRev) || 0 },
   })
   return true
+}
+
+/**
+ * Insert `text` at the end of the session draft through the same scoped
+ * event the host slash menu executes (`slash/input-insert-text`). The span
+ * CAS uses the freshest input snapshot handed to the slot props — while the
+ * picker popover is open the composer draft cannot move (focus is in the
+ * picker), so the splice applies; a stale snapshot quietly no-ops, same as
+ * the host menu's span-CAS.
+ */
+function insertComposerText(scope, sessionId, input, text) {
+  const sessions = scope && scope.sessions
+  if (!sessions) return false
+  let actx
+  try { actx = sessions.scope(sessionId) } catch { return false }
+  if (actx === undefined || actx === null || typeof actx.bail !== 'function') return false
+  const draft = (input && input.draft) || ''
+  const at = draft.length
+  try {
+    return actx.bail(actx, 'slash/input-insert-text', {
+      text,
+      span: { start: at, end: at, draftRev: (input && input.draftRev) || 0 },
+    }) === true
+  } catch { return false }
+}
+
+/** Best-effort refocus of the composer textarea after the picker closes. */
+function refocusComposer() {
+  try {
+    const card = document.querySelector('[data-composer-card]')
+    const ta = card && card.querySelector('textarea')
+    if (ta && typeof ta.focus === 'function') ta.focus()
+  } catch {}
+}
+
+/** Picker popover list cap — beyond this the search input is the filter. */
+const PICKER_ROW_CAP = 200
+
+/**
+ * ＋ 专家 picker：锚定在按钮上方、自带搜索框的候选浮层（portal 到 body）。
+ * 宿主斜杠菜单靠「输入的 query」过滤，按钮打开的菜单没有输入载体——候选
+ * 太多时无从筛选，所以浮层自带搜索框。专家/专家团分两个 tab（tab 标签上的
+ * 计数跟随当前搜索过滤），各 tab 内按显示名排序（toRosterRows 已排好）。
+ * 键盘 ↑/↓/Enter/Esc，鼠标 hover+点击；tab 按钮 mousedown 不抢输入框焦点。
+ */
+function ExpertPicker(props) {
+  const t = props.t
+  const [query, setQuery] = useState('')
+  const [tab, setTab] = useState('agent') // 'agent' | 'team'
+  const [active, setActive] = useState(0)
+  const inputRef = useRef(null)
+  const listRef = useRef(null)
+  useEffect(() => { try { if (inputRef.current) inputRef.current.focus() } catch {} }, [])
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !(e.isComposing === true)) props.onClose() }
+    try { document.addEventListener('keydown', onKey) } catch {}
+    return () => { try { document.removeEventListener('keydown', onKey) } catch {} }
+  }, [])
+  const lower = query.trim().toLowerCase()
+  const { agents, teams } = splitRosterByType(props.rows)
+  const filteredAgents = lower === '' ? agents : agents.filter((r) => pickerRowMatch(r, lower))
+  const filteredTeams = lower === '' ? teams : teams.filter((r) => pickerRowMatch(r, lower))
+  const shown = (tab === 'team' ? filteredTeams : filteredAgents).slice(0, PICKER_ROW_CAP)
+  useEffect(() => { setActive(0) }, [lower, tab, props.rows])
+  useEffect(() => {
+    const list = listRef.current
+    const el = list && list.children[active]
+    if (el && typeof el.scrollIntoView === 'function') { try { el.scrollIntoView({ block: 'nearest' }) } catch {} }
+  }, [active])
+  const onKeyDown = (e) => {
+    // IME 组词中的按键不触发选择（回车是选定拼音候选，不是 pick）
+    if (e.nativeEvent && e.nativeEvent.isComposing === true) return
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => Math.min(i + 1, shown.length - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)) }
+    else if (e.key === 'Enter') { e.preventDefault(); const row = shown[active]; if (row) props.onPick(row) }
+  }
+  const width = 400
+  const winW = typeof window !== 'undefined' ? window.innerWidth : 800
+  const winH = typeof window !== 'undefined' ? window.innerHeight : 600
+  const left = Math.max(8, Math.min(props.anchor.left, winW - width - 8))
+  const bottom = Math.max(8, winH - props.anchor.top + 6)
+  const tabBtn = (key, labelKey, count) => h('button', {
+    type: 'button', role: 'tab', className: 'exp-tab', 'data-on': tab === key, 'aria-selected': tab === key,
+    onMouseDown: (e) => { e.preventDefault(); setTab(key) }, onClick: () => setTab(key),
+  }, `${t(labelKey)} (${count})`)
+  return h('div', { className: 'exp-picker-backdrop', onMouseDown: (e) => { if (e.target === e.currentTarget) props.onClose() } },
+    h('div', { className: 'exp-picker', style: { left, bottom, width }, role: 'dialog', 'aria-label': t('pickExpertTitle') },
+      h('input', {
+        ref: inputRef, className: 'exp-input exp-picker-input', value: query,
+        placeholder: t('searchPlaceholder'), onChange: (e) => setQuery(e.target.value), onKeyDown,
+      }),
+      h('div', { className: 'exp-tabs exp-picker-tabs', role: 'tablist' },
+        tabBtn('agent', 'pickerTabAgents', filteredAgents.length),
+        tabBtn('team', 'pickerTabTeams', filteredTeams.length)),
+      h('div', { className: 'exp-picker-list', ref: listRef, role: 'listbox' },
+        props.rows === null
+          ? h('div', { className: 'exp-picker-empty' }, t('pickerLoading'))
+          : shown.length === 0
+            ? h('div', { className: 'exp-picker-empty' }, t('pickerEmpty'))
+            : shown.map((row, i) => h('button', {
+                key: row.name, type: 'button', role: 'option', 'aria-selected': i === active,
+                className: 'exp-picker-row', 'data-active': i === active,
+                onMouseEnter: () => setActive(i),
+                onMouseDown: (e) => { e.preventDefault(); props.onPick(row) },
+              },
+                row.icon ? h('span', { className: 'exp-picker-icon', 'aria-hidden': 'true' }, row.icon) : null,
+                h('span', { className: 'exp-picker-name' }, row.displayName || row.name),
+                row.displayName && row.displayName !== row.name ? h('span', { className: 'exp-picker-literal' }, row.name) : null,
+                h('span', { className: 'exp-picker-desc' }, row.plainDescription || ''))))))
 }
 
 // ── Small components ─────────────────────────────────────────────────────
@@ -531,7 +704,7 @@ function DetailModal({ name, source, t, onClose, onInstalled, onDeleted }) {
       ) : null))
 }
 
-function MarketSettingsCard({ t, onToast, onSynced }) {
+function MarketSettingsDialog({ t, onClose, onToast, onSynced }) {
   const [status, setStatus] = useState(null)
   const [form, setForm] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -554,7 +727,6 @@ function MarketSettingsCard({ t, onToast, onSynced }) {
       const dirText = (form.repoDir || '').trim()
       if (dirText !== '' && dirText !== (status && status.dir)) patch.repoDir = dirText
       if (typeof form.token === 'string' && form.token !== '') patch.token = form.token
-      if (form.token === null) patch.token = null
       await fetchJson(`${API}/market/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
       setForm((f) => ({ ...f, token: '' }))
       onToast(t('saved'))
@@ -562,43 +734,65 @@ function MarketSettingsCard({ t, onToast, onSynced }) {
     } catch (e) { onToast(String(e && e.message)) }
     setBusy(false)
   }
-  const field = (label, value, onChange, type) => h('label', null, label,
-    h('input', { className: 'exp-input', type: type || 'text', value: value ?? '', onChange: (e) => onChange(e.target.value) }))
-  if (status === null) return null
-  return h('div', { className: 'exp-settings' },
-    h('div', { className: 'exp-status-line' },
-      h('b', null, t('marketSettings')),
-      h('span', null, `${t('repoDirLabel')}: ${status.dir}`),
-      h('span', null, `${t('lastSyncLabel')}: ${status.lastSyncAt ? formatTime(status.lastSyncAt) : t('never')}`),
-      status.localCommit ? h('span', null, `${t('localCommitLabel')}: ${String(status.localCommit).slice(0, 8)}`) : null,
-      status.remoteCommit ? h('span', null, `${t('remoteCommitLabel')}: ${String(status.remoteCommit).slice(0, 8)}`, status.needsUpdate ? Badge({ kind: 'type', children: t('needsUpdateTag') }) : null) : null,
-      !status.gitAvailable ? h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } }, t('gitMissing')) : null,
-      status.sparsePaths ? h('span', null, `sparse: ${(status.sparsePaths || []).join(', ')}`) : null),
-    h('div', { className: 'exp-form-row' },
-      field(t('repoUrlLabel'), form.url, (v) => setForm({ ...form, url: v })),
-      field(t('branchLabel'), form.branch, (v) => setForm({ ...form, branch: v }))),
-    h('div', { className: 'exp-form-row' },
-      field(t('repoDirLabel'), form.repoDir, (v) => setForm({ ...form, repoDir: v })),
-      field(`${t('tokenLabel')}${status.hasToken ? ` (${t('tokenConfigured')})` : ''}`, form.token ?? '', (v) => setForm({ ...form, token: v }), 'password')),
-    h('div', { className: 'exp-form-row' },
-      h('label', { className: 'exp-checkline' },
-        h('input', { type: 'checkbox', checked: !!form.autoSync, onChange: (e) => setForm({ ...form, autoSync: e.target.checked }) }), t('autoSyncLabel')),
-      h('label', { className: 'exp-checkline' },
-        h('input', { type: 'checkbox', checked: !!form.syncOnStartup, onChange: (e) => setForm({ ...form, syncOnStartup: e.target.checked }) }), t('syncOnStartupLabel')),
-      h('span', { style: { flex: 1 } }),
-      status.hasToken ? h('button', { className: 'exp-btn', disabled: busy, onClick: () => setForm({ ...form, token: null }) }, t('clearToken')) : null,
-      h('button', { className: 'exp-btn', disabled: busy || status.syncing, onClick: sync }, busy || status.syncing ? t('syncing') : t('syncNow')),
-      h(prim('Button'), { onClick: save, disabled: busy }, t('save'))))
+  const clearToken = async () => {
+    setBusy(true)
+    try {
+      await fetchJson(`${API}/market/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: null }) })
+      onToast(t('saved'))
+      await load()
+    } catch (e) { onToast(String(e && e.message)) }
+    setBusy(false)
+  }
+  // 布局逐行对齐技能市场的市场设置弹窗：状态区 = 左标签/右值成行；
+  // 输入区 = 全宽堆叠、placeholder 即标签；底部 = 右对齐 保存 + 立即同步(主按钮)。
+  const short = (c) => (c ? String(c).slice(0, 8) : '-')
+  const row = (label, value) => h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, padding: '3px 0' } },
+    h('span', { className: 'exp-profession' }, label), h('span', { style: { wordBreak: 'break-all', textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, value))
+  return h('div', { className: 'exp-modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) onClose() } },
+    h('div', { className: 'exp-modal', style: { maxWidth: 640 } },
+      h('div', { className: 'exp-modal-head' },
+        h('span', { className: 'exp-title' }, t('marketSettings')),
+        h('button', { className: 'exp-btn exp-modal-close', onClick: onClose }, t('close'))),
+      status === null ? h('div', { className: 'exp-empty' }, '…')
+        : h('div', { style: { display: 'contents' } },
+          !status.gitAvailable ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 } }, t('gitMissing')) : null,
+          h('div', null,
+            row(t('repoUrlLabel'), status.url),
+            row(t('branchLabel'), status.branch),
+            row(t('localCommitLabel'), short(status.localCommit)),
+            status.remoteCommit ? h('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
+              status.needsUpdate ? Badge({ kind: 'type', children: t('needsUpdateTag') }) : null) : null,
+            row(t('remoteCommitLabel'), short(status.remoteCommit)),
+            row(t('lastSyncLabel'), status.lastSyncAt ? formatTime(status.lastSyncAt) : t('never')),
+            row(t('repoDirLabel'), status.dir),
+            status.sparsePaths ? row('sparse', (status.sparsePaths || []).join(', ')) : null),
+          h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
+            h('label', { className: 'exp-checkline' },
+              h('input', { type: 'checkbox', checked: !!form.autoSync, onChange: (e) => setForm({ ...form, autoSync: e.target.checked }) }), t('autoSyncLabel')),
+            h('label', { className: 'exp-checkline' },
+              h('input', { type: 'checkbox', checked: !!form.syncOnStartup, onChange: (e) => setForm({ ...form, syncOnStartup: e.target.checked }) }), t('syncOnStartupLabel'))),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+            h('input', { className: 'exp-input', value: form.url ?? '', placeholder: t('repoUrlLabel'), onChange: (e) => setForm({ ...form, url: e.target.value }), style: { width: '100%', boxSizing: 'border-box' } }),
+            h('input', { className: 'exp-input', value: form.branch ?? '', placeholder: t('branchLabel'), onChange: (e) => setForm({ ...form, branch: e.target.value }), style: { width: '100%', boxSizing: 'border-box' } }),
+            h('input', { className: 'exp-input', value: form.repoDir ?? '', placeholder: t('repoDirLabel'), onChange: (e) => setForm({ ...form, repoDir: e.target.value }), style: { width: '100%', boxSizing: 'border-box' } }),
+            h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+              h('input', { className: 'exp-input', type: 'password', value: form.token ?? '', onChange: (e) => setForm({ ...form, token: e.target.value }),
+                placeholder: status.hasToken ? `${t('tokenLabel')} · ${t('tokenConfigured')}` : t('tokenLabel'), style: { flex: 1 } }),
+              status.hasToken ? h('button', { className: 'exp-btn', disabled: busy, onClick: clearToken }, t('clearToken')) : null)),
+          h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 } },
+            h('button', { className: 'exp-btn', disabled: busy, onClick: save }, t('save')),
+            h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: busy || status.syncing, onClick: sync }, busy || status.syncing ? t('syncing') : t('syncNow'))))))
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────
 
-function ExpertsPage({ t, embedded }) {
+function ExpertsPage({ t, embedded, onClose }) {
   const [tab, setTab] = useState('market')
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState(null) // {name, source}
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [busyName, setBusyName] = useState(null)
   const [toast, setToast] = useState(null)
   const showToast = (text) => { setToast(text); setTimeout(() => setToast(null), 2600) }
@@ -637,14 +831,18 @@ function ExpertsPage({ t, embedded }) {
     } catch (e) { showToast(String(e && e.message)) }
     setBusyName(null)
   }
-  return h('div', { className: 'exp-page' },
+  return h('div', { className: 'exp-page' + (embedded ? '' : ' exp-overlay') },
+    !embedded ? h('div', { className: 'exp-head' },
+      h('span', { className: 'exp-title' }, t('title')),
+      h('span', { className: 'exp-spacer' }),
+      h('button', { className: 'exp-btn', onClick: () => { if (onClose) onClose() } }, t('close'))) : null,
     h('div', { className: 'exp-toolbar' },
       h('div', { className: 'exp-tabs' },
         h('button', { className: 'exp-tab', 'data-on': tab === 'installed', onClick: () => setTab('installed') }, `${t('tabInstalled')}${data ? ` (${data.installed.length})` : ''}`),
         h('button', { className: 'exp-tab', 'data-on': tab === 'market', onClick: () => setTab('market') }, `${t('tabMarket')}${data ? ` (${data.market.length})` : ''}`)),
       h('input', { className: 'exp-input exp-search', placeholder: t('searchPlaceholder'), value: search, onChange: (e) => setSearch(e.target.value) }),
-      h('span', { className: 'exp-count' }, `${rows.length}`)),
-    tab === 'market' ? h(MarketSettingsCard, { t, onToast: showToast, onSynced: reload }) : null,
+      h('span', { className: 'exp-count' }, `${rows.length}`),
+      tab === 'market' ? h('button', { className: 'exp-btn', title: t('marketSettings'), onClick: () => setSettingsOpen(true) }, t('marketSettings')) : null),
     error !== '' ? h('div', { className: 'exp-empty' }, `${t('loadFailed')}: ${error}`) : null,
     data !== null && rows.length === 0 ? h('div', { className: 'exp-empty' }, tab === 'installed' ? t('installedEmpty') : t('marketEmpty')) : null,
     rows.length > 0
@@ -658,6 +856,9 @@ function ExpertsPage({ t, embedded }) {
       onInstalled: () => { setSelected(null); showToast(t('installedDone')); reload() },
       onDeleted: () => { setSelected(null); showToast(t('removedDone')); reload() },
     }) : null,
+    settingsOpen ? h(MarketSettingsDialog, {
+      t, onClose: () => setSettingsOpen(false), onToast: showToast, onSynced: reload,
+    }) : null,
     toast !== null ? h('div', { className: 'exp-toast' }, toast) : null)
 }
 
@@ -669,6 +870,7 @@ module.exports = {
   __internals: {
     NS, ZH, EN, matchExpert, formatSize, formatTime, avatarUrl,
     EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource, fetchRoster,
+    toRosterRows, insertComposerText, splitRosterByType, pickerRowMatch,
   },
   /** Test/host helper: mount a standalone page into any container. */
   __boot(container, opts = {}) {
@@ -759,8 +961,8 @@ module.exports = {
           inject: () => ({ t }),
         }, function ExpertButtonSlot(apiProps) {
           return h(ComposerButtonSlot, {
-            __t: t, icon: '🧑‍💼', label: t('pickExpert'), title: t('pickExpertTitle'),
-            source: EXPERT_SOURCE_NAME, composerScopeRef: () => composerScope,
+            __t: t, label: t('pickExpert'), title: t('pickExpertTitle'),
+            composerScopeRef: () => composerScope,
             sessionId: apiProps && apiProps.sessionId, input: apiProps && apiProps.input,
           })
         }))
@@ -769,34 +971,91 @@ module.exports = {
   },
 }
 
+/** Sidebar footer button inline style — mirrors the skills-market entry so
+ *  both plugins read identically in the rail (icon + label, full width). */
+function footerStyle() {
+  return { display: 'inline-flex', alignItems: 'center', gap: 6, margin: '4px 10px', padding: '8px 10px',
+    border: 'none', borderRadius: 8, background: 'transparent', color: 'var(--dsw-alias-label-secondary)',
+    font: 'inherit', fontSize: 13, cursor: 'pointer', width: 'calc(100% - 20px)', textAlign: 'left' }
+}
+
+/** Panel state lives OUTSIDE React: sidebar churn remounts slot entries, and
+ *  any state kept in them is torn down with them (skills-market 同款修法）。 */
+const panelStore = {
+  open: false,
+  listeners: new Set(),
+  set(v) { panelStore.open = v; for (const fn of panelStore.listeners) fn(v) },
+  subscribe(fn) { panelStore.listeners.add(fn); return () => panelStore.listeners.delete(fn) },
+}
+
 /** Footer slot entry: the button, and — when open — the whole experts page
  *  portaled to <body> as a fullscreen overlay (same pattern as the skills
  *  market footer entry). */
 function FooterSlotComponent(props) {
-  const t = props.__t
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(panelStore.open)
+  useEffect(() => panelStore.subscribe(setOpen), [])
   useEffect(ensureStyles, [])
-  if (!open) {
-    return h('button', { className: 'exp-btn', onClick: () => setOpen(true), title: t('title') }, t('title'))
-  }
-  const page = h(ExpertsPage, { t, embedded: false, onClose: () => setOpen(false) })
-  if (RDP && typeof RDP.createPortal === 'function') return RDP.createPortal(page, document.body)
-  return page
+  const t = props.__t
+  const labelText = t ? t('title') : 'Expert Management'
+  // The sidebar renders this entry with a `wide` owner prop: the collapsed
+  // rail passes false and shows the icon alone; expanded shows the label.
+  const wide = props.wide !== false
+  return h('span', { style: { display: 'contents' } },
+    h('button', { title: labelText, 'aria-label': labelText, onClick: () => panelStore.set(!panelStore.open),
+        style: footerStyle() },
+      '\u{1F465}',
+      wide ? ' ' + labelText : ''),
+    open && (() => {
+      const page = h(ExpertsPage, { t, embedded: false, onClose: () => panelStore.set(false) })
+      // Fullscreen: portal the fixed-position page to <body> so no sidebar
+      // ancestor (transform-containing or otherwise) can clip it.
+      if (RDP && typeof RDP.createPortal === 'function' && typeof document !== 'undefined') {
+        return RDP.createPortal(page, document.body)
+      }
+      return page // fallback: fixed positioning still applies from here
+    })())
 }
 
-/** Composer tool-row button: opens one registered '/' source over the
- *  session's trigger controller. Hidden while the inputTriggers/sessions
- *  services are absent (plugin composed without the trigger pipeline). */
+/** Composer tool-row button: 加号+文字 chip，点击在按钮上方打开自带搜索的
+ *  专家 picker 浮层；pick 经 slash/input-insert-text 写入 `/expert-<name> `。
+ *  浮层面板盖住按钮以外的区域，再点一次按钮会先落在背板上——天然形成开关切换。
+ *  inputTriggers/sessions 服务缺席时按钮隐藏（管理页不受影响）。 */
 function ComposerButtonSlot(props) {
   useEffect(ensureStyles, [])
+  const [picker, setPicker] = useState(null) // {left, top} 锚点快照；null = 关闭
+  const [rows, setRows] = useState(null)     // null = 加载中
+  const btnRef = useRef(null)
+  const liveInput = useRef(props.input)
+  liveInput.current = props.input
   const composerScope = props.composerScopeRef ? props.composerScopeRef() : null
-  const ready = !!(composerScope && composerScope.inputTriggers && composerScope.sessions && props.sessionId)
+  const ready = !!(composerScope && composerScope.sessions && props.sessionId)
   if (!ready) return null
+  const close = () => setPicker(null)
+  const open = () => {
+    let anchor = { left: 16, top: 160 }
+    try { if (btnRef.current) anchor = btnRef.current.getBoundingClientRect() } catch {}
+    setPicker({ left: anchor.left, top: anchor.top })
+    setRows(null)
+    Promise.resolve(fetchRoster())
+      .then((list) => setRows(Array.isArray(list) ? list : []))
+      .catch(() => setRows([]))
+  }
+  const pick = (row) => {
+    insertComposerText(composerScope, props.sessionId, liveInput.current, `/${row.name} `)
+    close()
+    refocusComposer()
+  }
+  const popover = picker !== null && RDP && typeof RDP.createPortal === 'function'
+    ? RDP.createPortal(h(ExpertPicker, { t: props.__t, anchor: picker, rows, onClose: close, onPick: pick }), document.body)
+    : null
   return h('button', {
     className: 'exp-chip',
+    ref: btnRef,
     title: props.title || props.label,
-    onClick: () => { openTriggerSource(composerScope, props.sessionId, props.input, props.source) },
-  }, `${props.icon || ''}${props.icon ? ' ' : ''}${props.label}`)
+    'aria-haspopup': 'dialog',
+    'aria-expanded': picker !== null,
+    onClick: open,
+  }, props.label, popover)
 }
 
 /** Settings section slot entry: render the page directly in the host tree. */

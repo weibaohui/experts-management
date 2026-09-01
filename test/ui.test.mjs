@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 // Plain-Node 契约测试：client/index.js 自带 React/primitives shim，可直接 require
 const client = require('../client/index.js')
-const { NS, ZH, EN, matchExpert, avatarUrl, EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource } = client.__internals
+const { NS, ZH, EN, matchExpert, avatarUrl, EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource, toRosterRows, insertComposerText, splitRosterByType, pickerRowMatch } = client.__internals
 
 test('client exports the browser-plane contract', () => {
   assert.equal(client.name, '@weibaohui/experts-management')
@@ -126,4 +126,69 @@ test('avatarUrl builds the encoded API url, member optional', () => {
   assert.equal(avatarUrl('backend-architect', 'market'), '/experts-management/api/avatar?name=backend-architect&source=market')
   // URLSearchParams 把空格编成 '+'，服务端 URL.searchParams 解码回空格
   assert.equal(avatarUrl('a b', 'extra-src', 'lead-a'), '/experts-management/api/avatar?name=a+b&source=extra-src&member=lead-a')
+})
+
+test('toRosterRows surfaces the displayName, flags teams, sorts by displayName', () => {
+  const rows = toRosterRows(
+    [{ name: 'plain', description: 'no display name' },
+     { name: 'backend-architect', displayName: '磐石', description: '分布式系统', expertType: 'agent' }],
+    [{ name: 'review-team', displayName: '评审专家组', expertType: 'team', profession: '代码评审' }],
+  )
+  assert.equal(rows.length, 3)
+  // 按显示名 zh 排序：磐石(pan) < 评审(ping) < plain（拉丁排中文后）
+  assert.deepEqual(rows.map((r) => r.displayName), ['磐石', '评审专家组', 'plain'])
+  // pick 字面量保持 expert-<id>；displayName 前缀进描述供宿主菜单行展示
+  assert.equal(rows[0].name, 'expert-backend-architect')
+  assert.equal(rows[0].displayName, '磐石')
+  assert.equal(rows[0].description, '磐石 · 分布式系统')
+  assert.equal(rows[0].plainDescription, '分布式系统')
+  assert.equal(rows[0].icon, '🧑‍💼')
+  assert.equal(rows[0].team, false)
+  // 专家团：图标 + team 标记 + 显示名
+  assert.equal(rows[1].icon, '👥')
+  assert.equal(rows[1].team, true)
+  assert.equal(rows[1].description, '评审专家组 · 代码评审')
+  // 无 displayName → 回退内部名，描述原样不重复前缀
+  assert.equal(rows[2].displayName, 'plain')
+  assert.equal(rows[2].description, 'no display name')
+  // 非数组输入按空处理，不抛错
+  assert.deepEqual(toRosterRows(undefined, null), [])
+})
+
+test('splitRosterByType separates single experts from teams, sorted order preserved', () => {
+  const rows = toRosterRows(
+    [{ name: 'a', displayName: '甲' }, { name: 'b', displayName: '乙', expertType: 'team' }],
+    [{ name: 'c', displayName: '丙', expertType: 'team' }, { name: 'd', displayName: '丁' }],
+  )
+  // toRosterRows 已按拼音排序：丙(b) < 丁(d) < 甲(j) < 乙(y)
+  const { agents, teams } = splitRosterByType(rows)
+  assert.deepEqual(agents.map((r) => r.displayName), ['丁', '甲'])
+  assert.deepEqual(teams.map((r) => r.displayName), ['丙', '乙'])
+  // 空/非法输入 → 两个空组
+  assert.deepEqual(splitRosterByType(null), { agents: [], teams: [] })
+  assert.deepEqual(splitRosterByType(undefined), { agents: [], teams: [] })
+})
+
+test('pickerRowMatch searches displayName/description but not the expert- prefix', () => {
+  const row = { name: 'expert-review-team', displayName: '评审专家组', plainDescription: '代码评审' }
+  assert.equal(pickerRowMatch(row, '评审'), true)
+  assert.equal(pickerRowMatch(row, 'review-team'), true)
+  // 'expert' 前缀不参与匹配：搜 expert 不该命中全部
+  assert.equal(pickerRowMatch(row, 'expert'), false)
+  assert.equal(pickerRowMatch(row, 'kubernetes'), false)
+})
+
+test('insertComposerText bails slash/input-insert-text with an end-of-draft span', () => {
+  const calls = []
+  const scope = { sessions: { scope: (id) => ({ id, bail(...args) { calls.push(args); return true } }) } }
+  const ok = insertComposerText(scope, 's1', { draft: '你好', draftRev: 5 }, '/expert-a ')
+  assert.equal(ok, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][1], 'slash/input-insert-text')
+  assert.deepEqual(calls[0][2], { text: '/expert-a ', span: { start: 2, end: 2, draftRev: 5 } })
+  // bail 未被认领（返回值非 true）→ false；服务缺席 / scope 抛错 → false，无副作用
+  assert.equal(insertComposerText({ sessions: { scope: () => ({ bail: () => undefined }) } }, 's', {}, '/x '), false)
+  assert.equal(insertComposerText(null, 's', {}, '/x '), false)
+  assert.equal(insertComposerText({ sessions: { scope: () => { throw new Error('x') } } }, 's', {}, '/x '), false)
+  assert.equal(insertComposerText({ sessions: { scope: () => null } }, 's', {}, '/x '), false)
 })
