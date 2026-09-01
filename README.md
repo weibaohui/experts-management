@@ -3,7 +3,9 @@
 [![DSH plugin](https://img.shields.io/badge/dsh-plugin-green)](https://github.com/topics/dsh-plugin)
 [![npm version](https://img.shields.io/npm/v/@weibaohui/experts-management)](https://www.npmjs.com/package/@weibaohui/experts-management)
 
-**专家市场插件**：管理 ntd 格式的专家与专家团队（单个专家 / 多人团队），浏览安装 50+ 内置专家；每个专家注册为「仅用户可调用」的技能，在对话输入框输入 `/expert-名称` 即可以该专家的身份执行任务。
+**专家市场插件**：管理 ntd 格式的专家与专家团队（单个专家 / 多人团队），浏览安装 50+ 内置专家；每个专家注册为「仅用户可调用」的技能，在对话输入框输入 `/expert-名称`（或点 composer 工具行的「＋专家」按钮）即可以该专家的身份执行任务。
+
+![专家市场：从市场浏览安装到 composer ＋专家注入](docs/demo.gif)
 
 ## 核心功能
 
