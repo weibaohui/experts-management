@@ -1016,15 +1016,15 @@ module.exports = {
               if (st === undefined || !st.isDirectory()) throw new Error(`skill '${n}' is not attached to expert '${expert.name}'`)
               detachDirs.push({ n, dir })
             }
-            // attach 全部先在技能注册表解析源目录（任一缺失整体拒绝）
-            const snapshot = await ctx.skills.snapshot({})
-            const attachDirs = attach.map((n) => {
-              const entry = (snapshot.skills || []).find((x) => x.name === n)
-              if (entry === undefined || entry.resourceBase === undefined || entry.resourceBase.kind !== 'directory' || typeof entry.resourceBase.path !== 'string') {
-                throw new Error(`skill '${n}' not found in the skill registry`)
-              }
-              return { n, from: entry.resourceBase.path }
-            })
+            // attach 全部先在用户技能库解析源目录（任一缺失整体拒绝）
+            const libRoot = join(dshHome(), 'skills')
+            const attachDirs = []
+            for (const n of attach) {
+              const from = join(libRoot, n)
+              const st = await fsP.stat(join(from, 'SKILL.md')).catch(() => undefined)
+              if (st === undefined || !st.isFile()) throw new Error(`skill '${n}' not found in the user skill library (${libRoot})`)
+              attachDirs.push({ n, from })
+            }
             for (const d of detachDirs) await fsP.rm(d.dir, { recursive: true, force: true })
             for (const a of attachDirs) {
               const target = join(expert.dir, 'skills', a.n)
@@ -1065,12 +1065,23 @@ module.exports = {
             return
           }
 
-          // GET /experts-management/api/available-skills — 技能关联选择器数据源
+          // GET /experts-management/api/available-skills — 技能关联选择器数据源：
+          // 用户技能库（~/.dsh/skills）目录直读。刻意不走 skills 注册表——那会把
+          // 市场货架库存（5900+ 条）漏进来；也不附 bundled/项目级技能。
           if (req.method === 'GET' && apiPath.endsWith('/experts-management/api/available-skills')) {
-            const snapshot = await ctx.skills.snapshot({})
-            const list = (snapshot.skills || [])
-              .filter((x) => x.invocation === undefined || x.invocation.modelInvocable !== false)
-              .map((x) => ({ name: x.name, description: typeof x.description === 'string' ? x.description.slice(0, 200) : '' }))
+            const libRoot = join(dshHome(), 'skills')
+            const list = []
+            let libEntries = []
+            try { libEntries = await fsP.readdir(libRoot, { withFileTypes: true }) } catch { /* 无技能库 */ }
+            for (const ent of libEntries) {
+              if (!ent.isDirectory() || !isSafeExpertName(ent.name)) continue
+              let content
+              try { content = await fsP.readFile(join(libRoot, ent.name, 'SKILL.md'), 'utf8') } catch { continue }
+              const parsed = parseSkillMd(content)
+              const description = String(parsed.descriptionZh ?? parsed.descriptionEn ?? parsed.description ?? '').slice(0, 200)
+              list.push({ name: ent.name, description })
+            }
+            list.sort((a, b) => a.name.localeCompare(b.name))
             sendJson(res, 200, { skills: list })
             return
           }
