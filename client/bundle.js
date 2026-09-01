@@ -13,7 +13,7 @@ window.__ModuleLoader__.load({
      *
      * One React app for every surface (settings section; the former sidebar
      *  fullscreen-overlay entry was retired — pair with dsh-settings-ui):
-     * expert management page (installed / market views + detail modal + market
+     * expert management page (mine / built-in views + detail modal + built-in
      * sync settings). Plus the composer integration:
      * - an `expert` input-trigger source on `/` (candidates from the plugin's own
      *   HTTP API; pick inserts the literal `/expert-<name> ` token whose send the
@@ -79,11 +79,11 @@ window.__ModuleLoader__.load({
     const ZH = {
       title: '专家管理',
       close: '关闭',
-      tabInstalled: '已安装',
-      tabMarket: '市场',
+      tabMine: '我的',
+      tabBuiltin: '内置',
       searchPlaceholder: '搜索专家名称、职业、描述…',
-      installedEmpty: '用户库还没有专家。去「市场」页浏览并安装。',
-      marketEmpty: '市场为空。请在设置中同步市场仓库。',
+      mineEmpty: '用户库还没有专家。去「内置」页浏览并安装。',
+      builtinEmpty: '内置专家为空。请在设置中同步内置仓库。',
       expertTypeAgent: '专家',
       expertTypeTeam: '团队',
       sourceLabel: '来源',
@@ -111,10 +111,10 @@ window.__ModuleLoader__.load({
       filesLabel: '文件',
       versionLabel: '版本',
       sourceReadonly: '只读来源（可在 NTD 中管理，或安装到用户库）',
-      marketSettings: '市场设置',
+      builtinSettings: '内置设置',
       syncNow: '立即同步',
       syncing: '同步中，可能需要一分钟…',
-      syncDoneUpdated: '同步完成，市场已更新',
+      syncDoneUpdated: '同步完成，内置已更新',
       syncDoneLatest: '已是最新版本',
       firstCloneDone: '首次克隆完成',
       repoUrlLabel: '仓库地址',
@@ -148,11 +148,11 @@ window.__ModuleLoader__.load({
     const EN = {
       title: 'Expert Management',
       close: 'Close',
-      tabInstalled: 'Installed',
-      tabMarket: 'Market',
+      tabMine: 'Mine',
+      tabBuiltin: 'Built-in',
       searchPlaceholder: 'Search experts by name, profession, description…',
-      installedEmpty: 'No experts in the user library yet. Browse the Market tab and install one.',
-      marketEmpty: 'Market is empty. Sync the market repo in settings.',
+      mineEmpty: 'No experts in the user library yet. Browse the Built-in tab and install one.',
+      builtinEmpty: 'Built-in experts are empty. Sync the built-in repo in settings.',
       expertTypeAgent: 'Expert',
       expertTypeTeam: 'Team',
       sourceLabel: 'Source',
@@ -180,10 +180,10 @@ window.__ModuleLoader__.load({
       filesLabel: 'Files',
       versionLabel: 'Version',
       sourceReadonly: 'Read-only source (manage in NTD, or install into the user library)',
-      marketSettings: 'Market settings',
+      builtinSettings: 'Built-in settings',
       syncNow: 'Sync now',
       syncing: 'Syncing, may take a minute…',
-      syncDoneUpdated: 'Sync complete, market updated',
+      syncDoneUpdated: 'Sync complete, built-in updated',
       syncDoneLatest: 'Already up to date',
       firstCloneDone: 'First clone done',
       repoUrlLabel: 'Repository URL',
@@ -715,7 +715,7 @@ window.__ModuleLoader__.load({
           ) : null))
     }
 
-    function MarketSettingsDialog({ t, onClose, onToast, onSynced }) {
+    function BuiltinSettingsDialog({ t, onClose, onToast, onSynced }) {
       const [status, setStatus] = useState(null)
       const [form, setForm] = useState(null)
       const [busy, setBusy] = useState(false)
@@ -762,7 +762,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'exp-modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) onClose() } },
         h('div', { className: 'exp-modal', style: { maxWidth: 640 } },
           h('div', { className: 'exp-modal-head' },
-            h('span', { className: 'exp-title' }, t('marketSettings')),
+            h('span', { className: 'exp-title' }, t('builtinSettings')),
             h('button', { className: 'exp-btn exp-modal-close', onClick: onClose }, t('close'))),
           status === null ? h('div', { className: 'exp-empty' }, '…')
             : h('div', { style: { display: 'contents' } },
@@ -798,7 +798,7 @@ window.__ModuleLoader__.load({
     // ── Page ─────────────────────────────────────────────────────────────────
 
     function ExpertsPage({ t, embedded, onClose }) {
-      const [tab, setTab] = useState('market')
+      const [tab, setTab] = useState('builtin')
       const [data, setData] = useState(null)
       const [error, setError] = useState('')
       const [search, setSearch] = useState('')
@@ -812,7 +812,7 @@ window.__ModuleLoader__.load({
       const rows = useMemo(() => {
         if (!data) return []
         const lower = search.trim().toLowerCase()
-        const list = tab === 'installed' ? data.installed : data.market
+        const list = tab === 'mine' ? data.installed : data.market
         return list.filter((e) => matchExpert(e, lower))
       }, [data, tab, search])
       const install = async (row) => {
@@ -849,13 +849,13 @@ window.__ModuleLoader__.load({
           h('button', { className: 'exp-btn', onClick: () => { if (onClose) onClose() } }, t('close'))) : null,
         h('div', { className: 'exp-toolbar' },
           h('div', { className: 'exp-tabs' },
-            h('button', { className: 'exp-tab', 'data-on': tab === 'installed', onClick: () => setTab('installed') }, `${t('tabInstalled')}${data ? ` (${data.installed.length})` : ''}`),
-            h('button', { className: 'exp-tab', 'data-on': tab === 'market', onClick: () => setTab('market') }, `${t('tabMarket')}${data ? ` (${data.market.length})` : ''}`)),
+            h('button', { className: 'exp-tab', 'data-on': tab === 'mine', onClick: () => setTab('mine') }, `${t('tabMine')}${data ? ` (${data.installed.length})` : ''}`),
+            h('button', { className: 'exp-tab', 'data-on': tab === 'builtin', onClick: () => setTab('builtin') }, `${t('tabBuiltin')}${data ? ` (${data.market.length})` : ''}`)),
           h('input', { className: 'exp-input exp-search', placeholder: t('searchPlaceholder'), value: search, onChange: (e) => setSearch(e.target.value) }),
           h('span', { className: 'exp-count' }, `${rows.length}`),
-          tab === 'market' ? h('button', { className: 'exp-btn', title: t('marketSettings'), onClick: () => setSettingsOpen(true) }, t('marketSettings')) : null),
+          tab === 'builtin' ? h('button', { className: 'exp-btn', title: t('builtinSettings'), onClick: () => setSettingsOpen(true) }, t('builtinSettings')) : null),
         error !== '' ? h('div', { className: 'exp-empty' }, `${t('loadFailed')}: ${error}`) : null,
-        data !== null && rows.length === 0 ? h('div', { className: 'exp-empty' }, tab === 'installed' ? t('installedEmpty') : t('marketEmpty')) : null,
+        data !== null && rows.length === 0 ? h('div', { className: 'exp-empty' }, tab === 'mine' ? t('mineEmpty') : t('builtinEmpty')) : null,
         rows.length > 0
           ? h(PagedGrid, {
               items: rows,
@@ -867,7 +867,7 @@ window.__ModuleLoader__.load({
           onInstalled: () => { setSelected(null); showToast(t('installedDone')); reload() },
           onDeleted: () => { setSelected(null); showToast(t('removedDone')); reload() },
         }) : null,
-        settingsOpen ? h(MarketSettingsDialog, {
+        settingsOpen ? h(BuiltinSettingsDialog, {
           t, onClose: () => setSettingsOpen(false), onToast: showToast, onSynced: reload,
         }) : null,
         toast !== null ? h('div', { className: 'exp-toast' }, toast) : null)
