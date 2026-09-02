@@ -42,6 +42,8 @@ window.__ModuleLoader__.load({
         var primaryStyle = Object.assign({}, btnStyle, { background: 'var(--dsw-alias-brand-primary,#4a7dff)', borderColor: 'var(--dsw-alias-brand-primary,#4a7dff)', color: '#fff' })
 
         return function ActionShareDialog(props) {
+          var title = props.title
+          var hint = props.hint
           var labels = props.labels || {}
           var _p = useState(props.initialPrompt || '')
           var prompt = _p[0]; var setPrompt = _p[1]
