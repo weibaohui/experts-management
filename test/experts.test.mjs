@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile as execFileCb } from 'node:child_process'
@@ -18,7 +18,7 @@ const {
 
 // ── HTTP handler harness（同 skills-management 测试样式）─────────────────
 
-function setupPlugin(config) {
+function setupPlugin(config, snapshotSkills = []) {
   let handler
   let registered
   let invalidations = 0
@@ -27,6 +27,7 @@ function setupPlugin(config) {
       registerProvider: (create) => {
         registered = create({ signal: new AbortController().signal, invalidate: () => { invalidations += 1 } })
       },
+      snapshot: async () => ({ skills: snapshotSkills }),
     },
     webServer: { register: (route) => { handler = route.handler } },
     effect: (fn) => fn(),
@@ -54,11 +55,12 @@ function setupPlugin(config) {
     await handler(req, res)
     return { status: chunks.status, payload: chunks.body ? JSON.parse(chunks.body) : undefined }
   }
-  const callRaw = (method, url) => new Promise((fulfil, reject) => {
+  const callRaw = (method, url, rawBody) => new Promise((fulfil, reject) => {
     const req = new EventEmitter()
     req.method = method
     req.url = url
     req.headers = {}
+    req.on('error', () => {})
     const parts = []
     const out = { status: undefined }
     const res = new EventEmitter()
@@ -66,6 +68,7 @@ function setupPlugin(config) {
     res.write = (chunk) => { parts.push(Buffer.from(chunk)) }
     res.end = (chunk) => { if (chunk !== undefined) parts.push(Buffer.from(chunk)); fulfil({ status: out.status, body: Buffer.concat(parts).toString('utf8') }) }
     Promise.resolve(handler(req, res)).catch(reject)
+    if (rawBody !== undefined) setTimeout(() => { req.emit('data', rawBody); req.emit('end') }, 30) // avatar 端点先 locate 再挂 body 监听，等它就绪
   })
   return { call, callRaw, registered, getInvalidations: () => invalidations }
 }
@@ -454,4 +457,118 @@ test('builtin sync sparse-clones only the experts subtree; runtime repoDir switc
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+// ── 编辑端点（v0.3）：agent-md / metadata / expert-skills / avatar ──────
+
+const PNG_BUF = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(8)])
+
+async function setupInstalledExpert({ withRegistrySkill = false } = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-experts-edit-'))
+  const builtin = join(root, 'builtin', 'experts')
+  await mkdir(builtin, { recursive: true })
+  await writeExpert(builtin, 'backend-architect', { skills: withRegistrySkill ? ['fullstack-dev'] : [] })
+  const installed = join(root, 'installed')
+  const env = setupPlugin(
+    { builtinRepoDir: join(root, 'builtin'), installedDir: installed },
+    withRegistrySkill
+      ? [{ name: 'fullstack-dev', description: '全栈技能', resourceBase: { kind: 'directory', path: join(builtin, 'backend-architect', 'skills', 'fullstack-dev') } }]
+      : [],
+  )
+  const ins = await env.call('POST', '/experts-management/api/install', { name: 'backend-architect', source: 'builtin' })
+  assert.equal(ins.status, 201)
+  return { root, env, installed, builtin }
+}
+
+test('agent-md PUT 更新角色定义并触发失效；未知 agent / 未安装专家拒绝', async () => {
+  const { root, env, installed } = await setupInstalledExpert()
+  try {
+    const res = await env.call('PUT', '/experts-management/api/agent-md', { name: 'backend-architect', content: '---\nname: backend-architect\ndescription: 改过的角色\n---\n\n新角色定义全文' })
+    assert.equal(res.status, 200)
+    assert.ok(env.getInvalidations() >= 1)
+    const onDisk = await readFile(join(installed, 'backend-architect', 'agents', 'backend-architect.md'), 'utf8')
+    assert.match(onDisk, /新角色定义全文/)
+    const bad = await env.call('PUT', '/experts-management/api/agent-md', { name: 'backend-architect', agent: 'ghost', content: 'x' })
+    assert.equal(bad.status, 400)
+    const missing = await env.call('PUT', '/experts-management/api/agent-md', { name: 'not-installed', content: 'x' })
+    assert.equal(missing.status, 400)
+    const empty = await env.call('PUT', '/experts-management/api/agent-md', { name: 'backend-architect', content: '  ' })
+    assert.equal(empty.status, 400)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('metadata PUT 更新展示字段并保留未知键；形状非法拒绝', async () => {
+  const { root, env, installed } = await setupInstalledExpert()
+  try {
+    // 预埋一个未知键，验证读-改-写不丢
+    const pjPath = join(installed, 'backend-architect', '.codebuddy-plugin', 'plugin.json')
+    const pj = JSON.parse(await readFile(pjPath, 'utf8'))
+    pj.customFutureKey = 'keep-me'
+    await writeFile(pjPath, JSON.stringify(pj))
+    const res = await env.call('PUT', '/experts-management/api/metadata', { name: 'backend-architect', metadata: {
+      displayName: { zh: '我的后端专家', en: 'My Backend' },
+      tags: [{ zh: '后端', en: 'Backend' }, { zh: '架构', en: '' }],
+    } })
+    assert.equal(res.status, 200)
+    const after = JSON.parse(await readFile(pjPath, 'utf8'))
+    assert.equal(after.displayName.zh, '我的后端专家')
+    assert.equal(after.customFutureKey, 'keep-me')
+    assert.deepEqual(after.tags.map((t) => t.zh), ['后端', '架构'])
+    // 原有其它字段保留（profession 未传不动）
+    assert.equal(after.profession.zh, '后端架构师')
+    const bad = await env.call('PUT', '/experts-management/api/metadata', { name: 'backend-architect', metadata: { tags: 'not-an-array' } })
+    assert.equal(bad.status, 400)
+    const tooMany = await env.call('PUT', '/experts-management/api/metadata', { name: 'backend-architect', metadata: { tags: Array.from({ length: 21 }, () => ({ zh: 'x' })) } })
+    assert.equal(tooMany.status, 400)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('expert-skills PUT：attach 从注册表复制副本、detach 删除副本，plugin.json.skills 同步；缺失整体拒绝', async () => {
+  const { root, env, installed } = await setupInstalledExpert({ withRegistrySkill: true })
+  try {
+    // 初始：安装时带了一个 fullstack-dev 副本（来自内置），先 detach 验证删除
+    const before = JSON.parse(await readFile(join(installed, 'backend-architect', '.codebuddy-plugin', 'plugin.json'), 'utf8'))
+    assert.deepEqual(before.skills, ['./skills/fullstack-dev'])
+    const det = await env.call('PUT', '/experts-management/api/expert-skills', { name: 'backend-architect', detach: ['fullstack-dev'] })
+    assert.equal(det.status, 200)
+    assert.deepEqual(det.payload.skills, [])
+    await assert.rejects(readFile(join(installed, 'backend-architect', 'skills', 'fullstack-dev', 'SKILL.md')))
+    // detach 未附技能 → 400
+    const detMiss = await env.call('PUT', '/experts-management/api/expert-skills', { name: 'backend-architect', detach: ['fullstack-dev'] })
+    assert.equal(detMiss.status, 400)
+    // attach：从注册表快照解析的源目录复制副本
+    const att = await env.call('PUT', '/experts-management/api/expert-skills', { name: 'backend-architect', attach: ['fullstack-dev'] })
+    assert.equal(att.status, 200)
+    assert.deepEqual(att.payload.skills, ['./skills/fullstack-dev'])
+    const copied = await readFile(join(installed, 'backend-architect', 'skills', 'fullstack-dev', 'SKILL.md'), 'utf8')
+    assert.match(copied, /name: fullstack-dev/)
+    // 注册表缺失 → 400 且无半套变更
+    const attMiss = await env.call('PUT', '/experts-management/api/expert-skills', { name: 'backend-architect', attach: ['ghost-skill'] })
+    assert.equal(attMiss.status, 400)
+    const pjNow = JSON.parse(await readFile(join(installed, 'backend-architect', '.codebuddy-plugin', 'plugin.json'), 'utf8'))
+    assert.deepEqual(pjNow.skills, ['./skills/fullstack-dev'])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('avatar POST 写入 avatars/ 并更新 plugin.json.avatar；junk 拒绝', async () => {
+  const { root, env, installed } = await setupInstalledExpert()
+  try {
+    const res = await env.callRaw('POST', '/experts-management/api/avatar?name=backend-architect', PNG_BUF)
+    assert.equal(res.status, 200)
+    const pj = JSON.parse(await readFile(join(installed, 'backend-architect', '.codebuddy-plugin', 'plugin.json'), 'utf8'))
+    assert.equal(pj.avatar, 'avatars/expert.png')
+    const stored = await readFile(join(installed, 'backend-architect', 'avatars', 'expert.png'))
+    assert.ok(stored.equals(PNG_BUF))
+    const junk = await env.callRaw('POST', '/experts-management/api/avatar?name=backend-architect', Buffer.from('junk-junk-junk'))
+    assert.equal(junk.status, 400)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('available-skills GET 返回注册表技能清单', async () => {
+  const { root, env } = await setupInstalledExpert({ withRegistrySkill: true })
+  try {
+    const res = await env.call('GET', '/experts-management/api/available-skills')
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.payload.skills, [{ name: 'fullstack-dev', description: '全栈技能' }])
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

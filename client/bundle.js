@@ -92,6 +92,21 @@ window.__ModuleLoader__.load({
       install: '安装',
       installing: '安装中…',
       installedDone: '已安装到用户库',
+      editMeta: '编辑资料',
+      displayName: '显示名',
+      professionLabel: '职业',
+      displayDescription: '描述',
+      defaultInitPrompt: '默认开场',
+      tagsLabel: '标签',
+      edit: '编辑',
+      save: '保存',
+      cancel: '取消',
+      saved: '已保存',
+      attachSkill: '添加技能',
+      detach: '移除',
+      detachConfirm: '仅移除专家的技能副本，不影响技能库本体。确认移除？',
+      uploadAvatar: '更换头像',
+      uploading: '上传中…',
       overwrite: '覆盖安装',
       remove: '删除',
       removing: '删除中…',
@@ -161,6 +176,21 @@ window.__ModuleLoader__.load({
       install: 'Install',
       installing: 'Installing…',
       installedDone: 'Installed to the user library',
+      editMeta: 'Edit profile',
+      displayName: 'Display name',
+      professionLabel: 'Profession',
+      displayDescription: 'Description',
+      defaultInitPrompt: 'Default opener',
+      tagsLabel: 'Tags',
+      edit: 'Edit',
+      save: 'Save',
+      cancel: 'Cancel',
+      saved: 'Saved',
+      attachSkill: 'Add skill',
+      detach: 'Remove',
+      detachConfirm: "Only the expert's copy is removed — the skill library is untouched. Remove?",
+      uploadAvatar: 'Change avatar',
+      uploading: 'Uploading…',
       overwrite: 'Overwrite install',
       remove: 'Delete',
       removing: 'Deleting…',
@@ -262,7 +292,7 @@ window.__ModuleLoader__.load({
     .exp-skill-row:last-child{border-bottom:0}
     .exp-form-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .exp-form-row label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dsw-alias-label-secondary);flex:1;min-width:160px}
-    .exp-input{background:var(--dsw-alias-specific-input-major);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;width:100%}
+    .exp-flash{font-size:12px;color:var(--dsw-alias-state-positive,#3aa76d)}.exp-input{background:var(--dsw-alias-specific-input-major);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;width:100%}
     .exp-status-line{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
     .exp-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary);border-radius:10px;padding:8px 18px;font-size:13px;z-index:80;box-shadow:0 8px 24px rgba(0,0,0,.25)}
     .exp-checkline{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--dsw-alias-label-secondary)}
@@ -631,13 +661,93 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [busy, setBusy] = useState(false)
       const [agentMd, setAgentMd] = useState(null)
-      useEffect(() => {
-        let live = true
-        fetchJson(`${API}/detail?name=${encodeURIComponent(name)}${source ? `&source=${encodeURIComponent(source)}` : ''}`)
-          .then((d) => { if (live) setDetail(d) })
-          .catch((e) => { if (live) setError(String(e && e.message)) })
-        return () => { live = false }
-      }, [name, source])
+      const detailUrl = () => `${API}/detail?name=${encodeURIComponent(name)}${source ? `&source=${encodeURIComponent(source)}` : ''}`
+      const loadDetail = () => fetchJson(detailUrl())
+        .then((d) => setDetail(d))
+        .catch((e) => setError(String(e && e.message)))
+      useEffect(() => { loadDetail() }, [name, source])
+      // ── 编辑态（v0.3，仅 dsh 用户库专家）──
+      const [editingMd, setEditingMd] = useState(null)   // {agent, content} | null
+      const [metaEdit, setMetaEdit] = useState(false)
+      const [metaForm, setMetaForm] = useState(null)
+      const [skillsEdit, setSkillsEdit] = useState(false)
+      const [availSkills, setAvailSkills] = useState(null)
+      const [saving, setSaving] = useState(false)
+      const [savedFlash, setSavedFlash] = useState('')
+      const [avatarBusy, setAvatarBusy] = useState(false)
+      const avatarInputRef = useRef(null)
+      const flash = (text) => { setSavedFlash(text); setTimeout(() => setSavedFlash(''), 1600) }
+      const startEditMd = (agentName) => {
+        fetchJson(`${API}/agent-md?name=${encodeURIComponent(name)}${source ? `&source=${encodeURIComponent(source)}` : ''}&agent=${encodeURIComponent(agentName)}`)
+          .then((r) => setEditingMd({ agent: agentName, content: r.content }))
+          .catch((e) => setError(String(e && e.message)))
+      }
+      const saveMd = async () => {
+        setSaving(true); setError('')
+        try {
+          await fetchJson(`${API}/agent-md`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, agent: editingMd.agent, content: editingMd.content }) })
+          setEditingMd(null); flash(t('saved')); loadDetail()
+        } catch (e) { setError(String(e && e.message)) } finally { setSaving(false) }
+      }
+      const startMetaEdit = () => {
+        const p = (detail && detail.pluginJson) || {}
+        const loc = (v) => ({ zh: (v && v.zh) || '', en: (v && v.en) || '' })
+        const tags = Array.isArray(p.tags) ? p.tags : []
+        setMetaForm({
+          displayName: loc(p.displayName), profession: loc(p.profession),
+          displayDescription: loc(p.displayDescription), defaultInitPrompt: loc(p.defaultInitPrompt),
+          tagsZh: tags.map((x) => x.zh || '').filter(Boolean).join(','),
+          tagsEn: tags.map((x) => x.en || '').filter(Boolean).join(','),
+          quickPrompts: Array.isArray(p.quickPrompts) ? p.quickPrompts : [],
+        })
+        setMetaEdit(true)
+      }
+      const saveMeta = async () => {
+        setSaving(true); setError('')
+        const splitList = (v) => String(v || '').split(/[,，]/).map((x) => x.trim()).filter(Boolean)
+        const body = { metadata: {
+          displayName: metaForm.displayName, profession: metaForm.profession,
+          displayDescription: metaForm.displayDescription, defaultInitPrompt: metaForm.defaultInitPrompt,
+          tags: (function () {
+            const zhList = splitList(metaForm.tagsZh); const enList = splitList(metaForm.tagsEn)
+            const len = Math.max(zhList.length, enList.length)
+            return Array.from({ length: len }, (_, i) => ({ zh: zhList[i] || '', en: enList[i] || '' })).filter((t) => t.zh !== '' || t.en !== '')
+          })(),
+          quickPrompts: metaForm.quickPrompts,
+        } }
+        try {
+          await fetchJson(`${API}/metadata`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ...body }) })
+          setMetaEdit(false); flash(t('saved')); loadDetail()
+        } catch (e) { setError(String(e && e.message)) } finally { setSaving(false) }
+      }
+      const detachSkill = (skillName) => {
+        if (!window.confirm(t('detachConfirm'))) return
+        fetchJson(`${API}/expert-skills`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, detach: [skillName] }) })
+          .then(() => { flash(t('saved')); loadDetail() })
+          .catch((e) => setError(String(e && e.message)))
+      }
+      const openSkillsEdit = () => {
+        setSkillsEdit(true)
+        if (availSkills === null) {
+          fetchJson(`${API}/available-skills`).then((d) => setAvailSkills(d.skills || [])).catch((e) => setError(String(e && e.message)))
+        }
+      }
+      const attachSkill = (skillName) => {
+        fetchJson(`${API}/expert-skills`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, attach: [skillName] }) })
+          .then(() => { flash(t('saved')); loadDetail() })
+          .catch((e) => setError(String(e && e.message)))
+      }
+      const onAvatarFile = async (e) => {
+        const f = e.target.files && e.target.files[0]
+        e.target.value = ''
+        if (!f) return
+        setAvatarBusy(true); setError('')
+        try {
+          const buf = new Uint8Array(await f.arrayBuffer())
+          await fetchJson(`${API}/avatar?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf })
+          flash(t('saved')); loadDetail()
+        } catch (ex) { setError(String(ex && ex.message)) } finally { setAvatarBusy(false) }
+      }
       const loadAgentMd = () => {
         fetchJson(`${API}/agent-md?name=${encodeURIComponent(name)}${source ? `&source=${encodeURIComponent(source)}` : ''}`)
           .then((r) => setAgentMd(r.content))
@@ -679,6 +789,24 @@ window.__ModuleLoader__.load({
               kv(t('filesLabel'), `${detail.fileCount} / ${formatSize(detail.totalSize)}`),
               kv(t('dirLabel'), detail.dir)),
             detail.readOnly ? h('div', { className: 'exp-kv' }, h('span', { style: { color: 'var(--dsw-alias-label-tertiary)' } }, t('sourceReadonly'))) : null,
+            detail.source === 'dsh' ? h('div', { className: 'exp-form-row' },
+              h('button', { className: 'exp-btn', disabled: busy || saving || avatarBusy, onClick: startMetaEdit }, t('editMeta')),
+              h('button', { className: 'exp-btn', disabled: busy || saving || avatarBusy, onClick: () => { if (avatarInputRef.current) avatarInputRef.current.click() } }, avatarBusy ? t('uploading') : t('uploadAvatar')),
+              savedFlash ? h('span', { className: 'exp-flash' }, savedFlash) : null,
+              h('input', { ref: avatarInputRef, type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', style: { display: 'none' }, onChange: onAvatarFile })) : null,
+            metaEdit && metaForm ? h('div', { className: 'exp-section' },
+              h('div', { className: 'exp-section-title' }, t('editMeta')),
+              ...['displayName', 'profession', 'displayDescription', 'defaultInitPrompt'].map((key) => h('div', { key, style: { marginBottom: '8px' } },
+                h('div', { className: 'exp-section-title', style: { margin: '4px 0' } }, t(key === 'profession' ? 'professionLabel' : key === 'tags' ? 'tagsLabel' : key)),
+                h('input', { className: 'exp-input', value: metaForm[key].zh, placeholder: 'zh', onChange: (e) => setMetaForm({ ...metaForm, [key]: { ...metaForm[key], zh: e.target.value } }), style: { marginBottom: '4px', width: '100%' } }),
+                h('input', { className: 'exp-input', value: metaForm[key].en, placeholder: 'en', onChange: (e) => setMetaForm({ ...metaForm, [key]: { ...metaForm[key], en: e.target.value } }), style: { width: '100%' } }))),
+              h('div', { style: { marginBottom: '8px' } },
+                h('div', { className: 'exp-section-title', style: { margin: '4px 0' } }, t('tagsLabel')),
+                h('input', { className: 'exp-input', value: metaForm.tagsZh, placeholder: 'zh，逗号分隔', onChange: (e) => setMetaForm({ ...metaForm, tagsZh: e.target.value }), style: { marginBottom: '4px', width: '100%' } }),
+                h('input', { className: 'exp-input', value: metaForm.tagsEn, placeholder: 'en, comma separated', onChange: (e) => setMetaForm({ ...metaForm, tagsEn: e.target.value }), style: { width: '100%' } })),
+              h('div', { className: 'exp-form-row' },
+                h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: saving, onClick: saveMeta }, saving ? '…' : t('save')),
+                h('button', { className: 'exp-btn', disabled: saving, onClick: () => setMetaEdit(false) }, t('cancel')))) : null,
             (detail.quickPromptsZh || []).length > 0 ? h('div', { className: 'exp-section' },
               h('div', { className: 'exp-section-title' }, t('quickPrompts')),
               ...detail.quickPromptsZh.slice(0, 5).map((q, i) => h('div', { className: 'exp-kv', key: i }, '• ', q))) : null,
@@ -694,12 +822,31 @@ window.__ModuleLoader__.load({
               h('div', { className: 'exp-section-title' }, t('skills')),
               ...detail.skillMeta.map((s) => h('div', { className: 'exp-skill-row', key: s.skillName },
                 h('div', { style: { fontSize: 13 } }, `${s.emoji ? s.emoji + ' ' : ''}${s.skillName}`),
-                h('div', { className: 'exp-profession' }, s.descriptionZh || s.descriptionEn || s.description || '')))) : null,
+                h('div', { className: 'exp-profession' }, s.descriptionZh || s.descriptionEn || s.description || ''),
+                detail.source === 'dsh' ? h('button', { className: 'exp-btn', style: { marginLeft: 'auto' }, onClick: () => detachSkill(s.skillName) }, t('detach')) : null)),
+              detail.source === 'dsh' ? h('div', { className: 'exp-form-row' },
+                skillsEdit ? null : h('button', { className: 'exp-btn', onClick: openSkillsEdit }, t('attachSkill'))) : null,
+              detail.source === 'dsh' && skillsEdit ? h('div', { className: 'exp-form-row' },
+                availSkills === null ? h('span', { className: 'exp-profession' }, '…')
+                  : availSkills.length === 0 ? h('span', { className: 'exp-profession' }, '—')
+                    : availSkills.map((sk) => h('button', { key: sk.name, className: 'exp-btn', title: sk.description, onClick: () => attachSkill(sk.name) }, `＋ ${sk.name}`))) : null) : null,
             (detail.agentFiles || []).length > 0 ? h('div', { className: 'exp-section' },
               h('div', { className: 'exp-section-title' }, t('agents')),
               ...detail.agentFiles.map((a) => h('div', { className: 'exp-skill-row', key: a.relPath },
                 h('div', { style: { fontSize: 13 } }, `${a.emoji ? a.emoji + ' ' : ''}${a.name}${a.name === detail.leadAgentFile ? ' ★' : ''}`),
-                h('div', { className: 'exp-profession' }, a.description || '')))) : null,
+                h('div', { className: 'exp-profession' }, a.description || ''),
+                detail.source === 'dsh' ? h('button', { className: 'exp-btn', style: { marginLeft: 'auto' }, onClick: () => startEditMd(a.name) }, t('edit')) : null))) : null,
+            editingMd !== null ? h('div', { className: 'exp-section' },
+              h('div', { className: 'exp-section-title' }, `${t('edit')} · ${editingMd.agent}`),
+              h('textarea', {
+                className: 'exp-input', value: editingMd.content,
+                onChange: (e) => setEditingMd({ ...editingMd, content: e.target.value }),
+                spellCheck: false,
+                style: { width: '100%', minHeight: '260px', fontFamily: 'ui-monospace,monospace', fontSize: '12px', lineHeight: 1.6, whiteSpace: 'pre-wrap', background: 'var(--dsw-alias-bg-layer-2,transparent)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3))', borderRadius: '8px', padding: '10px', boxSizing: 'border-box' },
+              }),
+              h('div', { className: 'exp-form-row' },
+                h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: saving, onClick: saveMd }, saving ? '…' : t('save')),
+                h('button', { className: 'exp-btn', disabled: saving, onClick: () => setEditingMd(null) }, t('cancel')))) : null,
             h('div', { className: 'exp-form-row' },
               h('button', { className: 'exp-btn', onClick: () => (agentMd === null ? loadAgentMd() : setAgentMd(null)) }, agentMd === null ? t('viewAgentMd') : t('hideAgentMd')),
               detail.source !== 'dsh'
