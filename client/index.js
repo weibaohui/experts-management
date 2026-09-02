@@ -83,6 +83,7 @@ const ZH = {
   installing: '安装中…',
   installedDone: '已安装到用户库',
   shareBtn: '分享',
+  openChat: '打开对话',
   shareTitle: '分享专家到官方仓库',
   shareHint: 'AI 将读取本机令牌，fork 官方仓库 → 建分支 → 提交该专家目录 → 创建 PR。确认或修改提示词后，复制到当前会话发送执行。',
   shareParamName: '专家名',
@@ -180,6 +181,7 @@ const EN = {
   installing: 'Installing…',
   installedDone: 'Installed to the user library',
   shareBtn: 'Share',
+  openChat: 'Open chat',
   shareTitle: 'Share expert to the official repo',
   shareHint: 'AI will read the local token, fork the official repo → create a branch → commit the expert directory → open a PR. Review or edit the prompt, then copy it into the conversation to run.',
   shareParamName: 'Expert',
@@ -678,6 +680,8 @@ function getShareDialogComponent() {
   return shareDialogComponent
 }
 
+let sessionsApi = null // 「打开对话」用的宿主 sessions 服务（apply 时动态注入捕获）
+
 /** 专家分享提示词：提交到 ntd-resource 的 experts/ 子树（与技能分享同管线、同 token）。 */
 const EXPERT_SHARE_PROMPT = [
   '请把本地专家「{{expertName}}」{{version}}打包提交到 GitCode 官方仓库 weibaohui/ntd-resource 的 experts/ 子树，作为一个 PR 供维护者审核。',
@@ -919,9 +923,10 @@ function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast
         title: t('shareTitle'), hint: t('shareHint'),
         rows: [[t('shareParamName'), detail.name], [t('shareParamVersion'), detail.version || '1.0.0'], [t('shareParamDir'), detail.dir]],
         initialPrompt: PluginKit.substituteParams(EXPERT_SHARE_PROMPT, { expertName: detail.name, version: detail.version || '1.0.0', resourceDir: detail.dir, settingsFile: shareSettingsFile }),
-        labels: { copy: t('copyPrompt'), copied: t('copied'), run: t('runBtn'), running: t('running'), done: t('runDone'), failed: t('runFailed'), outputLabel: t('outputLabel') },
+        labels: { copy: t('copyPrompt'), copied: t('copied'), run: t('runBtn'), running: t('running'), done: t('runDone'), failed: t('runFailed'), outputLabel: t('outputLabel'), openSession: t('openChat') },
         run: (prompt) => fetchJson(`${API}/share/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, dir: detail.dir }) }),
         poll: (id) => fetchJson(`${API}/share/run?id=${encodeURIComponent(id)}`),
+        onOpenSession: (sessionId) => { if (onOpenSession) onOpenSession(sessionId) },
         onClose: () => setShareOpen(false),
       }) : null))
 }
@@ -1075,6 +1080,7 @@ function ExpertsPage({ t, embedded, onClose }) {
       : null,
     selected !== null ? h(DetailModal, {
       name: selected.name, source: selected.source, t, onClose: () => setSelected(null),
+      onOpenSession: (sessionId) => { try { sessionsApi.open(sessionId) } catch (e) { showToast(String(e && e.message)) } },
       onInstalled: () => { setSelected(null); showToast(t('installedDone')); reload() },
       onDeleted: () => { setSelected(null); showToast(t('removedDone')); reload() },
     }) : null,
