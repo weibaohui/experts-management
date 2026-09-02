@@ -672,12 +672,10 @@ function MemberAvatar({ expertName, source, member, t }) {
     : h('div', { className: 'exp-member-avatar', title: t('avatarLoadFailed') }, '👤')
 }
 
-function substituteParams(template, params) {
-  let out = template
-  for (const key of Object.keys(params)) {
-    out = out.split(`{{${key}}}`).join(String(params[key]))
-  }
-  return out
+let shareDialogComponent = null
+function getShareDialogComponent() {
+  if (shareDialogComponent === null) shareDialogComponent = PluginKit.makeActionShareDialog(__React)
+  return shareDialogComponent
 }
 
 /** 专家分享提示词：提交到 ntd-resource 的 experts/ 子树（与技能分享同管线、同 token）。 */
@@ -706,61 +704,6 @@ const EXPERT_SHARE_PROMPT = [
   '- 全程与最终汇报都使用中文。',
 ].join('\n')
 
-/** 分享抽屉（ntd ActionButton 同款）：可编辑提示词 + 参数预览 + 执行 + 输出。 */
-function ShareExpertDialog({ t, params, onClose }) {
-  const [prompt, setPrompt] = useState(substituteParams(EXPERT_SHARE_PROMPT, params))
-  const [job, setJob] = useState(null)   // {jobId,status,output,code}
-  const [busy, setBusy] = useState(false)
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    // settingsFile 随 DSH_HOME 变化——由宿主下发真实路径，提示词不再硬编码 ~/.dsh
-    fetchJson(`${API}/share/status`).then((d) => {
-      if (d && typeof d.settingsFile === 'string' && d.settingsFile !== '') {
-        setPrompt(substituteParams(EXPERT_SHARE_PROMPT, { ...params, settingsFile: d.settingsFile }))
-      }
-    }).catch(() => {})
-  }, [])
-  useEffect(() => {
-    if (job === null || job.status !== 'running') return
-    const timer = setInterval(async () => {
-      try { const d = await fetchJson(`${API}/share/run?id=${encodeURIComponent(job.jobId)}`); setJob({ ...d }) } catch {}
-    }, 1500)
-    return () => clearInterval(timer)
-  }, [job !== null && job.jobId])
-  const doRun = async () => {
-    setBusy(true)
-    try {
-      const r = await fetchJson(`${API}/share/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, dir: params.resourceDir }) })
-      setJob({ jobId: r.jobId, status: 'running', output: '', code: null })
-    } catch (e) { setPrompt(String(e && e.message)) } finally { setBusy(false) }
-  }
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(prompt) } catch {}
-    setCopied(true); setTimeout(() => setCopied(false), 1500)
-  }
-  const row = (label, value) => value ? h('div', null, h('b', null, label + '：'), h('span', null, value)) : null
-  return h('div', { className: 'exp-modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) onClose() } },
-    h('div', { className: 'exp-modal', style: { maxWidth: 640 } },
-      h('div', { className: 'exp-modal-head' },
-        h('div', { className: 'exp-name', style: { fontSize: 17 } }, t('shareTitle')),
-        h('button', { className: 'exp-btn exp-modal-close', onClick: onClose }, t('close'))),
-      h('div', { className: 'exp-hint', style: { fontSize: 12, opacity: .7 } }, t('shareHint')),
-      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 } },
-        row(t('shareParamName'), params.expertName),
-        row(t('shareParamVersion'), params.version || '-'),
-        row(t('shareParamDir'), params.resourceDir)),
-      h('textarea', {
-        value: prompt, onChange: (e) => setPrompt(e.target.value), spellCheck: false,
-        style: { width: '100%', minHeight: 190, resize: 'vertical', fontFamily: 'var(--dsw-font-family)', lineHeight: 1.6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-2,transparent)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3))', borderRadius: '8px', padding: '10px', boxSizing: 'border-box' },
-      }),
-      job !== null ? h('div', null,
-        h('div', { style: { fontSize: 12, opacity: .7, margin: '4px 0' } }, t('outputLabel') + ' · ' + (job.status === 'running' ? t('running') : job.status === 'done' ? t('runDone') : t('runFailed') + (job.code != null ? ' (' + job.code + ')' : ''))),
-        h('pre', { style: { maxHeight: 220, margin: 0, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 12, background: 'var(--dsw-alias-bg-layer-2,transparent)', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2))', borderRadius: '8px', padding: '8px' } }, job.output || '…')) : null,
-      h('div', { className: 'exp-form-row' },
-        h('button', { className: 'exp-btn', onClick: copy }, copied ? t('copied') : t('copyPrompt')),
-        h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: busy || (job !== null && job.status === 'running'), onClick: doRun }, job !== null && job.status === 'running' ? t('running') : t('runBtn')))))
-}
-
 function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast }) {
   const [detail, setDetail] = useState(null)
   const [error, setError] = useState('')
@@ -781,7 +724,12 @@ function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast
   const [savedFlash, setSavedFlash] = useState('')
   const [avatarBusy, setAvatarBusy] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  const [shareSettingsFile, setShareSettingsFile] = useState('')
   const avatarInputRef = useRef(null)
+  useEffect(() => {
+    if (shareOpen === false) return
+    fetchJson(`${API}/share/status`).then((d) => setShareSettingsFile(d.settingsFile || '')).catch(() => setShareSettingsFile(''))
+  }, [shareOpen])
   const flash = (text) => { setSavedFlash(text); setTimeout(() => setSavedFlash(''), 1600) }
   const startEditMd = (agentName) => {
     fetchJson(`${API}/agent-md?name=${encodeURIComponent(name)}${source ? `&source=${encodeURIComponent(source)}` : ''}&agent=${encodeURIComponent(agentName)}`)
@@ -967,9 +915,14 @@ function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast
           h('summary', { style: { cursor: 'pointer', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, t('pluginJson')),
           h('pre', { className: 'exp-pre' }, JSON.stringify(detail.plugin, null, 2))) : null,
       ) : null,
-      shareOpen ? h(ShareExpertDialog, {
-        t, onClose: () => setShareOpen(false),
-        params: { expertName: detail ? detail.name : name, version: detail && detail.version ? detail.version : '1.0.0', resourceDir: detail ? detail.dir : '~/.dsh/experts/' + name },
+      shareOpen ? h(getShareDialogComponent(), {
+        title: t('shareTitle'), hint: t('shareHint'),
+        rows: [[t('shareParamName'), detail.name], [t('shareParamVersion'), detail.version || '1.0.0'], [t('shareParamDir'), detail.dir]],
+        initialPrompt: PluginKit.substituteParams(EXPERT_SHARE_PROMPT, { expertName: detail.name, version: detail.version || '1.0.0', resourceDir: detail.dir, settingsFile: shareSettingsFile }),
+        labels: { copy: t('copyPrompt'), copied: t('copied'), run: t('runBtn'), running: t('running'), done: t('runDone'), failed: t('runFailed'), outputLabel: t('outputLabel') },
+        run: (prompt) => fetchJson(`${API}/share/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, dir: detail.dir }) }),
+        poll: (id) => fetchJson(`${API}/share/run?id=${encodeURIComponent(id)}`),
+        onClose: () => setShareOpen(false),
       }) : null))
 }
 
