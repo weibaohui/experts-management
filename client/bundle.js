@@ -92,6 +92,19 @@ window.__ModuleLoader__.load({
       install: '安装',
       installing: '安装中…',
       installedDone: '已安装到用户库',
+      shareBtn: '分享',
+      shareTitle: '分享专家到官方仓库',
+      shareHint: 'AI 将读取本机令牌，fork 官方仓库 → 建分支 → 提交该专家目录 → 创建 PR。确认或修改提示词后，复制到当前会话发送执行。',
+      shareParamName: '专家名',
+      shareParamVersion: '版本',
+      shareParamDir: '本机目录',
+      copyPrompt: '复制提示词',
+      copied: '已复制',
+      runBtn: '执行',
+      running: '执行中…',
+      runDone: '完成',
+      runFailed: '失败',
+      outputLabel: '执行输出',
       editMeta: '编辑资料',
       displayName: '显示名',
       professionLabel: '职业',
@@ -176,6 +189,19 @@ window.__ModuleLoader__.load({
       install: 'Install',
       installing: 'Installing…',
       installedDone: 'Installed to the user library',
+      shareBtn: 'Share',
+      shareTitle: 'Share expert to the official repo',
+      shareHint: 'AI will read the local token, fork the official repo → create a branch → commit the expert directory → open a PR. Review or edit the prompt, then copy it into the conversation to run.',
+      shareParamName: 'Expert',
+      shareParamVersion: 'Version',
+      shareParamDir: 'Local dir',
+      copyPrompt: 'Copy prompt',
+      copied: 'Copied',
+      runBtn: 'Run',
+      running: 'Running…',
+      runDone: 'Done',
+      runFailed: 'Failed',
+      outputLabel: 'Output',
       editMeta: 'Edit profile',
       displayName: 'Display name',
       professionLabel: 'Profession',
@@ -656,7 +682,96 @@ window.__ModuleLoader__.load({
         : h('div', { className: 'exp-member-avatar', title: t('avatarLoadFailed') }, '👤')
     }
 
-    function DetailModal({ name, source, t, onClose, onInstalled, onDeleted }) {
+    function substituteParams(template, params) {
+      let out = template
+      for (const key of Object.keys(params)) {
+        out = out.split(`{{${key}}}`).join(String(params[key]))
+      }
+      return out
+    }
+
+    /** 专家分享提示词：提交到 ntd-resource 的 experts/ 子树（与技能分享同管线、同 token）。 */
+    const EXPERT_SHARE_PROMPT = [
+      '请把本地专家「{{expertName}}」{{version}}打包提交到 GitCode 官方仓库 weibaohui/ntd-resource 的 experts/ 子树，作为一个 PR 供维护者审核。',
+      '',
+      '## 关键信息',
+      '- 专家目录：{{resourceDir}}（~ 表示当前用户家目录，执行前先展开为绝对路径）',
+      '- 官方仓库：weibaohui/ntd-resource（GitCode，API base = https://api.gitcode.com）',
+      '- PAT 位置：{{settingsFile}} 中 skills-management.market 段的 token 字段（由技能市场设置面板保存，与技能分享同源）。',
+      '',
+      '## 执行步骤（严格按顺序）',
+      '1. 读取 PAT：读取 {{settingsFile}}，定位 skills-management.market 段下的 token 字段。token 是敏感凭据，读取后不要把明文打印到输出、日志或最终结果里。',
+      '2. 展开专家目录为绝对路径，遍历该目录（含 agents/、skills/、avatars/ 子目录与 .codebuddy-plugin/plugin.json），收集每个文件的「相对该目录的路径」与内容；跳过 .git 一类同步元数据。',
+      '3. 把第 1 步读到的 token 作为 HTTP 认证令牌（bearer），按顺序调用 GitCode API：',
+      '   a. 验证用户：`GET https://api.gitcode.com/api/v5/user`，拿到 login 字段——后续所有 URL 里的 {owner} 一律用它。',
+      '   b. fork：`POST https://api.gitcode.com/api/v5/repos/weibaohui/ntd-resource/forks`；若返回 409/422 表示已 fork，视为成功。',
+      '   c. 建分支：`POST https://api.gitcode.com/api/v5/repos/{owner}/ntd-resource/branches`，JSON body 为 {"branch_name":"experts/{{expertName}}-<unix 时间戳>","refs":"main"}。',
+      '   d. 写文件：对第 2 步收集的每个文件，`POST https://api.gitcode.com/api/v5/repos/{owner}/ntd-resource/contents/experts/{{该文件相对专家目录的路径}}`。**必须**用 experts/ 前缀，不能写到仓库根目录。表单字段 content=<文件字节的 base64>、message="贡献专家 {{expertName}} {{version}}"、branch=<步骤 c 的分支名>。',
+      '   e. 创建 PR：`POST https://api.gitcode.com/api/v5/repos/weibaohui/ntd-resource/pulls`，JSON body 为 {"title":"[专家] {{expertName}} {{version}}","body":"专家目录 {{resourceDir}} 的文件清单与用途简介","head":"{owner}:{branch}","base":"main"}。',
+      '4. 完成后，最终输出 PR 的网页链接（响应里的 web_url 字段）。',
+      '',
+      '## 注意',
+      '- token 是敏感凭据，任何输出里都不要回显其明文。',
+      '- 如果任一步骤失败，先检查错误信息，不要盲目重试；若 token 失效，提示用户到技能市场的 ⚙ 设置面板重新填写。',
+      '- 全程与最终汇报都使用中文。',
+    ].join('\n')
+
+    /** 分享抽屉（ntd ActionButton 同款）：可编辑提示词 + 参数预览 + 执行 + 输出。 */
+    function ShareExpertDialog({ t, params, onClose }) {
+      const [prompt, setPrompt] = useState(substituteParams(EXPERT_SHARE_PROMPT, params))
+      const [job, setJob] = useState(null)   // {jobId,status,output,code}
+      const [busy, setBusy] = useState(false)
+      const [copied, setCopied] = useState(false)
+      useEffect(() => {
+        // settingsFile 随 DSH_HOME 变化——由宿主下发真实路径，提示词不再硬编码 ~/.dsh
+        fetchJson(`${API}/share/status`).then((d) => {
+          if (d && typeof d.settingsFile === 'string' && d.settingsFile !== '') {
+            setPrompt(substituteParams(EXPERT_SHARE_PROMPT, { ...params, settingsFile: d.settingsFile }))
+          }
+        }).catch(() => {})
+      }, [])
+      useEffect(() => {
+        if (job === null || job.status !== 'running') return
+        const timer = setInterval(async () => {
+          try { const d = await fetchJson(`${API}/share/run?id=${encodeURIComponent(job.jobId)}`); setJob({ ...d }) } catch {}
+        }, 1500)
+        return () => clearInterval(timer)
+      }, [job !== null && job.jobId])
+      const doRun = async () => {
+        setBusy(true)
+        try {
+          const r = await fetchJson(`${API}/share/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, dir: params.resourceDir }) })
+          setJob({ jobId: r.jobId, status: 'running', output: '', code: null })
+        } catch (e) { setPrompt(String(e && e.message)) } finally { setBusy(false) }
+      }
+      const copy = async () => {
+        try { await navigator.clipboard.writeText(prompt) } catch {}
+        setCopied(true); setTimeout(() => setCopied(false), 1500)
+      }
+      const row = (label, value) => value ? h('div', null, h('b', null, label + '：'), h('span', null, value)) : null
+      return h('div', { className: 'exp-modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) onClose() } },
+        h('div', { className: 'exp-modal', style: { maxWidth: 640 } },
+          h('div', { className: 'exp-modal-head' },
+            h('div', { className: 'exp-name', style: { fontSize: 17 } }, t('shareTitle')),
+            h('button', { className: 'exp-btn exp-modal-close', onClick: onClose }, t('close'))),
+          h('div', { className: 'exp-hint', style: { fontSize: 12, opacity: .7 } }, t('shareHint')),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 } },
+            row(t('shareParamName'), params.expertName),
+            row(t('shareParamVersion'), params.version || '-'),
+            row(t('shareParamDir'), params.resourceDir)),
+          h('textarea', {
+            value: prompt, onChange: (e) => setPrompt(e.target.value), spellCheck: false,
+            style: { width: '100%', minHeight: 190, resize: 'vertical', fontFamily: 'var(--dsw-font-family)', lineHeight: 1.6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-2,transparent)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3))', borderRadius: '8px', padding: '10px', boxSizing: 'border-box' },
+          }),
+          job !== null ? h('div', null,
+            h('div', { style: { fontSize: 12, opacity: .7, margin: '4px 0' } }, t('outputLabel') + ' · ' + (job.status === 'running' ? t('running') : job.status === 'done' ? t('runDone') : t('runFailed') + (job.code != null ? ' (' + job.code + ')' : ''))),
+            h('pre', { style: { maxHeight: 220, margin: 0, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 12, background: 'var(--dsw-alias-bg-layer-2,transparent)', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2))', borderRadius: '8px', padding: '8px' } }, job.output || '…')) : null,
+          h('div', { className: 'exp-form-row' },
+            h('button', { className: 'exp-btn', onClick: copy }, copied ? t('copied') : t('copyPrompt')),
+            h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: busy || (job !== null && job.status === 'running'), onClick: doRun }, job !== null && job.status === 'running' ? t('running') : t('runBtn')))))
+    }
+
+    function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast }) {
       const [detail, setDetail] = useState(null)
       const [error, setError] = useState('')
       const [busy, setBusy] = useState(false)
@@ -675,6 +790,7 @@ window.__ModuleLoader__.load({
       const [saving, setSaving] = useState(false)
       const [savedFlash, setSavedFlash] = useState('')
       const [avatarBusy, setAvatarBusy] = useState(false)
+      const [shareOpen, setShareOpen] = useState(false)
       const avatarInputRef = useRef(null)
       const flash = (text) => { setSavedFlash(text); setTimeout(() => setSavedFlash(''), 1600) }
       const startEditMd = (agentName) => {
@@ -848,6 +964,7 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: saving, onClick: saveMd }, saving ? '…' : t('save')),
                 h('button', { className: 'exp-btn', disabled: saving, onClick: () => setEditingMd(null) }, t('cancel')))) : null,
             h('div', { className: 'exp-form-row' },
+              h('button', { className: 'exp-btn', onClick: () => setShareOpen(true) }, t('shareBtn')),
               h('button', { className: 'exp-btn', onClick: () => (agentMd === null ? loadAgentMd() : setAgentMd(null)) }, agentMd === null ? t('viewAgentMd') : t('hideAgentMd')),
               detail.source !== 'dsh'
                 ? h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: busy, onClick: () => install(false) }, busy ? t('installing') : t('install'))
@@ -859,7 +976,11 @@ window.__ModuleLoader__.load({
             detail.plugin ? h('details', null,
               h('summary', { style: { cursor: 'pointer', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, t('pluginJson')),
               h('pre', { className: 'exp-pre' }, JSON.stringify(detail.plugin, null, 2))) : null,
-          ) : null))
+          ) : null,
+          shareOpen ? h(ShareExpertDialog, {
+            t, onClose: () => setShareOpen(false),
+            params: { expertName: detail ? detail.name : name, version: detail && detail.version ? detail.version : '1.0.0', resourceDir: detail ? detail.dir : '~/.dsh/experts/' + name },
+          }) : null))
     }
 
     function BuiltinSettingsDialog({ t, onClose, onToast, onSynced }) {
