@@ -463,17 +463,15 @@ test('builtin sync sparse-clones only the experts subtree; runtime repoDir switc
 
 const PNG_BUF = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(8)])
 
-async function setupInstalledExpert({ withRegistrySkill = false } = {}) {
+async function setupInstalledExpert({ withBundledSkill = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-experts-edit-'))
   const builtin = join(root, 'builtin', 'experts')
   await mkdir(builtin, { recursive: true })
-  await writeExpert(builtin, 'backend-architect', { skills: withRegistrySkill ? ['fullstack-dev'] : [] })
+  await writeExpert(builtin, 'backend-architect', { skills: withBundledSkill ? ['fullstack-dev'] : [] })
   const installed = join(root, 'installed')
   const env = setupPlugin(
     { builtinRepoDir: join(root, 'builtin'), installedDir: installed },
-    withRegistrySkill
-      ? [{ name: 'fullstack-dev', description: '全栈技能', resourceBase: { kind: 'directory', path: join(builtin, 'backend-architect', 'skills', 'fullstack-dev') } }]
-      : [],
+      [],
   )
   const ins = await env.call('POST', '/experts-management/api/install', { name: 'backend-architect', source: 'builtin' })
   assert.equal(ins.status, 201)
@@ -523,9 +521,18 @@ test('metadata PUT 更新展示字段并保留未知键；形状非法拒绝', a
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('expert-skills PUT：attach 从注册表复制副本、detach 删除副本，plugin.json.skills 同步；缺失整体拒绝', async () => {
-  const { root, env, installed } = await setupInstalledExpert({ withRegistrySkill: true })
+test('expert-skills PUT：attach 从用户技能库复制副本、detach 删除副本，plugin.json.skills 同步；缺失整体拒绝', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'dsh-experts-lib2-'))
+  const oldHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  let root
+  let env
+  let installed
   try {
+    const lib = join(home, 'skills')
+    await mkdir(join(lib, 'fullstack-dev'), { recursive: true })
+    await writeFile(join(lib, 'fullstack-dev', 'SKILL.md'), '---\nname: fullstack-dev\ndescription: 全栈技能\n---\n')
+    ;({ root, env, installed } = await setupInstalledExpert({ withBundledSkill: true }))
     // 初始：安装时带了一个 fullstack-dev 副本（来自内置），先 detach 验证删除
     const before = JSON.parse(await readFile(join(installed, 'backend-architect', '.codebuddy-plugin', 'plugin.json'), 'utf8'))
     assert.deepEqual(before.skills, ['./skills/fullstack-dev'])
@@ -542,12 +549,17 @@ test('expert-skills PUT：attach 从注册表复制副本、detach 删除副本�
     assert.deepEqual(att.payload.skills, ['./skills/fullstack-dev'])
     const copied = await readFile(join(installed, 'backend-architect', 'skills', 'fullstack-dev', 'SKILL.md'), 'utf8')
     assert.match(copied, /name: fullstack-dev/)
-    // 注册表缺失 → 400 且无半套变更
+    // 技能库缺失 → 400 且无半套变更
     const attMiss = await env.call('PUT', '/experts-management/api/expert-skills', { name: 'backend-architect', attach: ['ghost-skill'] })
     assert.equal(attMiss.status, 400)
     const pjNow = JSON.parse(await readFile(join(installed, 'backend-architect', '.codebuddy-plugin', 'plugin.json'), 'utf8'))
     assert.deepEqual(pjNow.skills, ['./skills/fullstack-dev'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally {
+    if (oldHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = oldHome
+    await rm(root, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true })
+  }
 })
 
 test('avatar POST 写入 avatars/ 并更新 plugin.json.avatar；junk 拒绝', async () => {
@@ -564,11 +576,26 @@ test('avatar POST 写入 avatars/ 并更新 plugin.json.avatar；junk 拒绝', a
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('available-skills GET 返回注册表技能清单', async () => {
-  const { root, env } = await setupInstalledExpert({ withRegistrySkill: true })
+test('available-skills GET 返回用户技能库清单（dshHome 隔离）', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'dsh-experts-lib-'))
+  const oldHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
   try {
+    const lib = join(home, 'skills')
+    await mkdir(join(lib, 'agent-browser-core'), { recursive: true })
+    await writeFile(join(lib, 'agent-browser-core', 'SKILL.md'), '---\nname: agent-browser-core\ndescription: 浏览器技能\n---\n')
+    await mkdir(join(lib, 'fullstack-dev'), { recursive: true })
+    await writeFile(join(lib, 'fullstack-dev', 'SKILL.md'), '---\nname: fullstack-dev\ndescription: 全栈技能\n---\n')
+    const { root, env } = await setupInstalledExpert()
     const res = await env.call('GET', '/experts-management/api/available-skills')
     assert.equal(res.status, 200)
-    assert.deepEqual(res.payload.skills, [{ name: 'fullstack-dev', description: '全栈技能' }])
-  } finally { await rm(root, { recursive: true, force: true }) }
+    assert.deepEqual(res.payload.skills, [
+      { name: 'agent-browser-core', description: '浏览器技能' },
+      { name: 'fullstack-dev', description: '全栈技能' },
+    ])
+  } finally {
+    if (oldHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = oldHome
+    await rm(home, { recursive: true, force: true })
+  }
 })
