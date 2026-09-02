@@ -125,7 +125,8 @@ async function writeExpert(base, name, { team = false, agents = null, skills = [
 
 test('plugin exports the host-plane contract', () => {
   assert.equal(plugin.name, 'experts-management')
-  assert.deepEqual(plugin.inject, ['skills', 'webServer', 'settings'])
+  // agents/agentDefaultModel/sessions：分享任务的进程内执行与「打开对话」
+  assert.deepEqual(plugin.inject, ['skills', 'webServer', 'settings', 'agents', 'agentDefaultModel', 'sessions'])
 })
 
 test('builtin sources never touch ntd application directories (~/.ntd/*)', () => {

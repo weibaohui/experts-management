@@ -19,7 +19,8 @@ window.__ModuleLoader__.load({
      *   title / hint / rows: [[label, value], ...] / initialPrompt
      *   run: async (prompt) => { jobId }      — 发起执行
      *   poll: async (jobId) => { status, output, code }
-     *   labels: { copy, copied, run, running, done, failed, outputLabel, close }
+     *   labels: { copy, copied, run, running, done, failed, outputLabel, openSession, close }
+     *   onOpenSession: (sessionId) => void                — 可选；job 出现 sessionId 时渲染「打开会话」
      *   onClose
      *
      * 全部样式内联（主题 token + 回退值），消费者无需自带 CSS。
@@ -80,6 +81,8 @@ window.__ModuleLoader__.load({
               setJob({ jobId: r.jobId, status: 'running', output: '', code: null })
             }).catch(function (e) { setError(String(e && e.message)) }).finally(function () { setBusy(false) })
           }
+          var canOpenSession = typeof props.onOpenSession === 'function' && job !== null && job.sessionId
+          var openSession = function () { props.onOpenSession(job.sessionId) }
           var copy = function () {
             if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
               navigator.clipboard.writeText(prompt).then(function () { setCopied(true); setTimeout(function () { setCopied(false) }, 1500) }).catch(function () {})
@@ -103,6 +106,7 @@ window.__ModuleLoader__.load({
                 h('div', { style: { fontSize: 12, opacity: .7, margin: '4px 0' } }, (labels.outputLabel || 'Output') + ' · ' + statusText),
                 h('pre', { style: { maxHeight: 220, margin: 0, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 12, background: 'var(--dsw-alias-bg-layer-2,transparent)', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2))', borderRadius: '8px', padding: '8px' } }, job.output || '…')) : null,
               h('div', { style: { display: 'flex', gap: 8 } },
+                canOpenSession ? h('button', { onClick: openSession, style: btnStyle }, labels.openSession || 'Open chat') : null,
                 h('button', { onClick: copy, style: btnStyle }, copied ? (labels.copied || 'Copied') : (labels.copy || 'Copy')),
                 h('button', { onClick: doRun, disabled: busy || (job !== null && job.status === 'running'), style: primaryStyle }, job !== null && job.status === 'running' ? (labels.running || 'Running…') : (labels.run || 'Run')))))
         }
@@ -196,6 +200,7 @@ window.__ModuleLoader__.load({
       installing: '安装中…',
       installedDone: '已安装到用户库',
       shareBtn: '分享',
+      openChat: '打开对话',
       shareTitle: '分享专家到官方仓库',
       shareHint: 'AI 将读取本机令牌，fork 官方仓库 → 建分支 → 提交该专家目录 → 创建 PR。确认或修改提示词后，复制到当前会话发送执行。',
       shareParamName: '专家名',
@@ -293,6 +298,7 @@ window.__ModuleLoader__.load({
       installing: 'Installing…',
       installedDone: 'Installed to the user library',
       shareBtn: 'Share',
+      openChat: 'Open chat',
       shareTitle: 'Share expert to the official repo',
       shareHint: 'AI will read the local token, fork the official repo → create a branch → commit the expert directory → open a PR. Review or edit the prompt, then copy it into the conversation to run.',
       shareParamName: 'Expert',
@@ -791,6 +797,8 @@ window.__ModuleLoader__.load({
       return shareDialogComponent
     }
 
+    let sessionsApi = null // 「打开对话」用的宿主 sessions 服务（apply 时动态注入捕获）
+
     /** 专家分享提示词：提交到 ntd-resource 的 experts/ 子树（与技能分享同管线、同 token）。 */
     const EXPERT_SHARE_PROMPT = [
       '请把本地专家「{{expertName}}」{{version}}打包提交到 GitCode 官方仓库 weibaohui/ntd-resource 的 experts/ 子树，作为一个 PR 供维护者审核。',
@@ -1032,9 +1040,10 @@ window.__ModuleLoader__.load({
             title: t('shareTitle'), hint: t('shareHint'),
             rows: [[t('shareParamName'), detail.name], [t('shareParamVersion'), detail.version || '1.0.0'], [t('shareParamDir'), detail.dir]],
             initialPrompt: PluginKit.substituteParams(EXPERT_SHARE_PROMPT, { expertName: detail.name, version: detail.version || '1.0.0', resourceDir: detail.dir, settingsFile: shareSettingsFile }),
-            labels: { copy: t('copyPrompt'), copied: t('copied'), run: t('runBtn'), running: t('running'), done: t('runDone'), failed: t('runFailed'), outputLabel: t('outputLabel') },
+            labels: { copy: t('copyPrompt'), copied: t('copied'), run: t('runBtn'), running: t('running'), done: t('runDone'), failed: t('runFailed'), outputLabel: t('outputLabel'), openSession: t('openChat') },
             run: (prompt) => fetchJson(`${API}/share/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, dir: detail.dir }) }),
             poll: (id) => fetchJson(`${API}/share/run?id=${encodeURIComponent(id)}`),
+            onOpenSession: (sessionId) => { if (onOpenSession) onOpenSession(sessionId) },
             onClose: () => setShareOpen(false),
           }) : null))
     }
@@ -1188,6 +1197,7 @@ window.__ModuleLoader__.load({
           : null,
         selected !== null ? h(DetailModal, {
           name: selected.name, source: selected.source, t, onClose: () => setSelected(null),
+          onOpenSession: (sessionId) => { try { sessionsApi.open(sessionId) } catch (e) { showToast(String(e && e.message)) } },
           onInstalled: () => { setSelected(null); showToast(t('installedDone')); reload() },
           onDeleted: () => { setSelected(null); showToast(t('removedDone')); reload() },
         }) : null,

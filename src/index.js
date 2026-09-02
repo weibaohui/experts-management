@@ -557,7 +557,7 @@ const MD_MAX_CHARS = 512 * 1024
 
 module.exports = {
   name: 'experts-management',
-  inject: ['skills', 'webServer', 'settings'],
+  inject: ['skills', 'webServer', 'settings', 'agents', 'agentDefaultModel', 'sessions'],
   __internals: {
     extractFrontmatter, parseFrontmatter, parseAgentMd, parseSkillMd, parsePluginJson,
     localized, truncateDescription, resolveWithin, isSafeExpertName,
@@ -811,14 +811,10 @@ module.exports = {
     })
 
     // ── HTTP API ─────────────────────────────────────────────────────────
-    // 分享执行：进程内 agents 服务（web app 自身）可用则流式，否则 headless spawn
     const shareRunJobs = new Map()
-    let shareServices = null
-    try {
-      if (ctx.inject && typeof ctx.inject === 'function') {
-        ctx.inject(['agents', 'agentDefaultModel', 'sessions'], (svcs) => { shareServices = svcs })
-      }
-    } catch {}
+    // 分享执行：进程内 agents 服务（静态注入，apply 时已就绪）。动态 ctx.inject
+    // 在 apply 内不触发是平台 gotcha（skills-management 同款教训）——改静态捕获
+    const shareServices = { agents: ctx.agents, agentDefaultModel: ctx.agentDefaultModel, sessions: ctx.sessions }
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
       path: '/experts-management/api',
