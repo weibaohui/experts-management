@@ -405,8 +405,8 @@ window.__ModuleLoader__.load({
     .exp-badge{font-size:11px;border-radius:6px;padding:2px 7px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
     .exp-badge[data-kind="type"]{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
     .exp-badge[data-kind="installed"]{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary)}
-    .exp-card-actions{display:flex;gap:8px;justify-content:flex-end}
-    .exp-btn{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border-radius:8px;padding:5px 12px;cursor:pointer;font:inherit;font-size:13px}
+    .exp-card-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+    .exp-btn{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border-radius:8px;padding:5px 12px;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap;flex:none}
     .exp-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}
     .exp-btn[data-primary="true"]{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary-inverted)}
     .exp-btn[data-danger="true"]{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
@@ -427,6 +427,7 @@ window.__ModuleLoader__.load({
     .exp-skill-row{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
     .exp-skill-row:last-child{border-bottom:0}
     .exp-form-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .exp-form-row .exp-btn{white-space:nowrap;flex:none}
     .exp-form-row label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dsw-alias-label-secondary);flex:1;min-width:160px}
     .exp-flash{font-size:12px;color:var(--dsw-alias-state-positive,#3aa76d)}.exp-input{background:var(--dsw-alias-specific-input-major);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;width:100%}
     .exp-status-line{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
