@@ -1,6 +1,6 @@
 {
   "name": "@weibaohui/experts-management",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "dsh 插件 · 专家管理：管理 ntd 格式的专家与专家团队（plugin.json + Agent MD + 技能集），浏览/安装 50+ 内置专家市场；每个专家注册为「仅用户可调用」的技能，在对话输入框用 /expert-名称 即可以该专家的身份执行任务（宿主确定性注入角色定义与技能清单，不占用模型目录 token）。",
   "license": "MIT",
   "keywords": [
