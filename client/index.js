@@ -708,7 +708,7 @@ const EXPERT_SHARE_PROMPT = [
   '- 全程与最终汇报都使用中文。',
 ].join('\n')
 
-function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast }) {
+function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast, onOpenSession }) {
   const [detail, setDetail] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -926,7 +926,7 @@ function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast
         labels: { copy: t('copyPrompt'), copied: t('copied'), run: t('runBtn'), running: t('running'), done: t('runDone'), failed: t('runFailed'), outputLabel: t('outputLabel'), openSession: t('openChat') },
         run: (prompt) => fetchJson(`${API}/share/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, dir: detail.dir }) }),
         poll: (id) => fetchJson(`${API}/share/run?id=${encodeURIComponent(id)}`),
-        onOpenSession: (sessionId) => { if (onOpenSession) onOpenSession(sessionId) },
+        onOpenSession: (sessionId) => { setShareOpen(false); if (onOpenSession) onOpenSession(sessionId) },
         onClose: () => setShareOpen(false),
       }) : null))
 }
