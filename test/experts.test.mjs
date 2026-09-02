@@ -599,25 +599,3 @@ test('available-skills GET 返回用户技能库清单（dshHome 隔离）', asy
     await rm(home, { recursive: true, force: true })
   }
 })
-
-test('share run：POST 建 job、GET 轮询、参数缺失 400', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-experts-share-'))
-  try {
-    const builtin = join(root, 'builtin', 'experts')
-    await mkdir(builtin, { recursive: true })
-    await writeExpert(builtin, 'backend-architect', {})
-    const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: join(root, 'installed') })
-    const bad = await env.call('POST', '/experts-management/api/share/run', { prompt: 'x', dir: join(root, 'nope') })
-    assert.equal(bad.status, 400)
-    const noPrompt = await env.call('POST', '/experts-management/api/share/run', { dir: root })
-    assert.equal(noPrompt.status, 400)
-    const started = await env.call('POST', '/experts-management/api/share/run', { prompt: '做一个演示任务', dir: root })
-    assert.equal(started.status, 202)
-    assert.ok(started.payload.jobId)
-    const poll = await env.call('GET', '/experts-management/api/share/run?id=' + started.payload.jobId)
-    assert.equal(poll.status, 200)
-    assert.ok(['running', 'done', 'failed', 'error'].includes(poll.payload.status))
-    const miss = await env.call('GET', '/experts-management/api/share/run?id=nope')
-    assert.equal(miss.status, 404)
-  } finally { await rm(root, { recursive: true, force: true }) }
-})

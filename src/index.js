@@ -19,8 +19,8 @@
  */
 
 const { createReadStream } = require('node:fs')
+const { execFile } = require('node:child_process')
 const { randomUUID } = require('node:crypto')
-const { execFile, spawn } = require('node:child_process')
 const fsP = require('node:fs/promises')
 const { basename, join, relative, resolve, sep } = require('node:path')
 const { homedir } = require('node:os')
@@ -552,94 +552,6 @@ async function locateEditable(locateExpert, name) {
 
 const MD_MAX_CHARS = 512 * 1024
 
-// ── 分享执行器（v0.3，与 skills-management 同构）：把提示词交给一个真实
-// agent 会话跑——优先进程内 agents 服务（流式输出），缺失则 headless spawn。
-const SHARE_RUN_TIMEOUT_MS = 30 * 60 * 1000
-const SHARE_RUN_OUTPUT_CAP = 256 * 1024
-
-function createShareRunJob({ binary, prompt, dir, jobs, logger, services }) {
-  const id = 'sr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-  const job = { id, status: 'running', startedAt: new Date().toISOString(), dir, promptHead: prompt.slice(0, 80), output: '', code: null }
-  jobs.set(id, job)
-  if (services && services.agents && services.agentDefaultModel) {
-    runShareInProcess(services, { prompt, dir, job, logger })
-      .catch(e => { job.status = 'error'; job.output = (job.output + '\n' + String(e && e.message)).slice(-SHARE_RUN_OUTPUT_CAP) })
-    return job
-  }
-  let child
-  try {
-    child = spawn(binary, ['--profile', 'headless', prompt], { cwd: dir })
-  } catch (e) {
-    job.status = 'error'
-    job.output = String(e && e.message)
-    return job
-  }
-  const append = (chunk) => {
-    job.output = (job.output + String(chunk)).slice(-SHARE_RUN_OUTPUT_CAP)
-  }
-  child.stdout && child.stdout.on('data', append)
-  child.stderr && child.stderr.on('data', append)
-  const timer = setTimeout(() => {
-    try { child.kill('SIGKILL') } catch {}
-    job.status = 'error'
-    job.output += '\n[killed: timeout]'
-  }, SHARE_RUN_TIMEOUT_MS)
-  if (typeof timer.unref === 'function') timer.unref()
-  child.on('error', (e) => { clearTimeout(timer); job.status = 'error'; append('\n' + String(e && e.message)) })
-  child.on('close', (code) => {
-    clearTimeout(timer)
-    job.status = code === 0 ? 'done' : 'failed'
-    job.code = code
-    logger.info && logger.info(`experts-management: share run ${id} ${job.status} (code ${code})`)
-  })
-  return job
-}
-
-async function runShareInProcess(services, { prompt, dir, job, logger }) {
-  const selection = services.agentDefaultModel.currentSelection()
-  const sessionId = 'session-' + randomUUID()
-  job.sessionId = sessionId
-  const { agent } = await services.agents.create({
-    sessionId,
-    // 标准预设：不带显式选择会继承用户默认（如 Solo Thinking 只有 thinking/notify
-    // 工具），读文件/调 API 都做不了
-    meta: { cwd: dir, agentPreset: 'standard' },
-    agentOptions: { provider: selection.provider, model: selection.model },
-  })
-  await agent.whenIdle()
-  const firstSeq = agent.session.seq
-  const seen = new Set()
-  const liveLine = (text) => {
-    job.output = (job.output + text).slice(-SHARE_RUN_OUTPUT_CAP)
-  }
-  const pump = () => {
-    for (const ev of agent.session.events) {
-      if (ev.seq < firstSeq || seen.has(ev.seq)) continue
-      seen.add(ev.seq)
-      const d = ev.data || {}
-      if (ev.type === 'assistant/chunk' && d.chunk && d.chunk.type === 'text' && d.chunk.text) {
-        liveLine(d.chunk.text)
-      } else if (ev.type === 'tool/call') {
-        liveLine('\n[tool] ' + d.name + ' ')
-      } else if (ev.type === 'assistant/message') {
-        liveLine('\n')
-      }
-    }
-  }
-  const timer = setInterval(pump, 300)
-  if (typeof timer.unref === 'function') timer.unref()
-  try {
-    agent.followup({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } })
-    await agent.whenIdle()
-  } finally {
-    clearInterval(timer)
-    pump()
-  }
-  try { await services.sessions.flush(agent.session) } catch {}
-  job.status = 'done'
-  logger.info && logger.info(`experts-management: share run ${job.id} done`)
-}
-
 // ── Module export ────────────────────────────────────────────────────────
 
 module.exports = {
@@ -898,14 +810,6 @@ module.exports = {
     })
 
     // ── HTTP API ─────────────────────────────────────────────────────────
-    // 分享执行：进程内 agents 服务（web app 自身）可用则流式，否则 headless spawn
-    const shareRunJobs = new Map()
-    let shareServices = null
-    try {
-      if (ctx.inject && typeof ctx.inject === 'function') {
-        ctx.inject(['agents', 'agentDefaultModel', 'sessions'], (svcs) => { shareServices = svcs })
-      }
-    } catch {}
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
       path: '/experts-management/api',
@@ -1179,36 +1083,6 @@ module.exports = {
             }
             list.sort((a, b) => a.name.localeCompare(b.name))
             sendJson(res, 200, { skills: list })
-            return
-          }
-
-          // GET /experts-management/api/share/status — 分享弹窗数据（settings 真实路径）
-          if (req.method === 'GET' && apiPath.endsWith('/experts-management/api/share/status')) {
-            sendJson(res, 200, { settingsFile: join(dshHome(), 'settings.yaml') })
-            return
-          }
-
-          // POST /experts-management/api/share/run {prompt, dir} → 真实 agent 会话执行
-          if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/share/run')) {
-            const body = await readJsonBody(req)
-            if (typeof body.prompt !== 'string' || body.prompt.trim() === '') { sendJson(res, 400, { error: 'body must provide prompt' }); return }
-            if (typeof body.dir !== 'string' || body.dir === '') { sendJson(res, 400, { error: 'body must provide dir' }); return }
-            // 支持 ~ 前缀（client 传的是 displayPath 折叠过的路径）
-            const dir = resolve(String(body.dir).startsWith('~') ? join(homedir(), String(body.dir).slice(2)) : body.dir)
-            const stat = await fsP.stat(dir).catch(() => undefined)
-            if (stat === undefined || !stat.isDirectory()) { sendJson(res, 400, { error: `dir not found: ${displayPath(dir)}` }); return }
-            const binary = process.env.EXPERTS_DSH_BIN || 'dsh'
-            const job = createShareRunJob({ binary, prompt: body.prompt, dir, jobs: shareRunJobs, logger: ctx.logger, services: shareServices })
-            sendJson(res, 202, { jobId: job.id, status: job.status })
-            return
-          }
-
-          // GET /experts-management/api/share/run?id= → 任务状态/输出
-          if (req.method === 'GET' && apiPath.endsWith('/experts-management/api/share/run')) {
-            const id = query.get('id') || ''
-            const job = shareRunJobs.get(id)
-            if (job === undefined) { sendJson(res, 404, { error: 'job not found' }); return }
-            sendJson(res, 200, { ...job, output: job.output.slice(-32 * 1024) })
             return
           }
 
