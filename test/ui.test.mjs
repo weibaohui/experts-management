@@ -192,3 +192,32 @@ test('insertComposerText bails slash/input-insert-text with an end-of-draft span
   assert.equal(insertComposerText({ sessions: { scope: () => { throw new Error('x') } } }, 's', {}, '/x '), false)
   assert.equal(insertComposerText({ sessions: { scope: () => null } }, 's', {}, '/x '), false)
 })
+
+test('parseCreateResult：agent 取 json+markdown 围栏；team 取带路径标注围栏（按序去重）；缺失回退 raw', () => {
+  const { parseCreateResult, CREATE_TEMPLATES, EXPERT_CREATE_PROMPT_AGENT, EXPERT_CREATE_PROMPT_TEAM } = client.__internals
+  // agent 型：输出含叙述与 [tool] 行，只取第一个 json/markdown 围栏
+  const agentOut = '好的，我来生成。\n```json\n{"name":"a-b","expertType":"agent"}\n```\n接下来是角色定义：\n```markdown\n---\nname: a-b\n---\n正文\n```\n[tool] write'
+  const agent = parseCreateResult(agentOut, 'agent')
+  assert.equal(agent.ok, true)
+  assert.equal(agent.pluginJson, '{"name":"a-b","expertType":"agent"}')
+  assert.match(agent.agentMd, /^---\nname: a-b/)
+  assert.match(agent.agentMd, /正文/)
+  // team 型：逐成员带路径围栏，出现顺序保留，同名去重
+  const teamOut = '```json\n{"name":"t","expertType":"team"}\n```\n```markdown agents/lead.md\n# lead\n```\n中间的叙述文字\n```markdown agents/member.md\n# member\n```\n```markdown agents/lead.md\n# duplicate\n```'
+  const team = parseCreateResult(teamOut, 'team')
+  assert.equal(team.ok, true)
+  assert.deepEqual(team.files.map((f) => f.file), ['agents/lead.md', 'agents/member.md'])
+  assert.equal(team.files[0].content, '# lead')
+  assert.equal(team.files[1].content, '# member')
+  // 围栏缺失 → ok:false + raw 原文（UI 展示并允许重试）
+  assert.equal(parseCreateResult('没有任何围栏', 'agent').ok, false)
+  assert.equal(parseCreateResult('```json\n{}\n```', 'team').ok, false)
+  assert.equal(parseCreateResult(undefined, 'agent').ok, false)
+  // 模板注册表：key=expertType；两套模板都含 {{description}} 占位与输出纪律
+  assert.deepEqual(Object.keys(CREATE_TEMPLATES), ['agent', 'team'])
+  assert.equal(CREATE_TEMPLATES.agent.prompt, EXPERT_CREATE_PROMPT_AGENT)
+  assert.equal(CREATE_TEMPLATES.team.prompt, EXPERT_CREATE_PROMPT_TEAM)
+  assert.match(EXPERT_CREATE_PROMPT_AGENT, /\{\{description\}\}/)
+  assert.match(EXPERT_CREATE_PROMPT_TEAM, /\{\{description\}\}/)
+  assert.match(EXPERT_CREATE_PROMPT_TEAM, /```markdown agents\//)
+})

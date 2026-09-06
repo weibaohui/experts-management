@@ -343,12 +343,12 @@ function buildExpertPrompt(agentMdBody, skillsText, expert) {
 
 // ── Shared route helpers ─────────────────────────────────────────────────
 
-function readJsonBody(req) {
+function readJsonBody(req, cap = MAX_BODY_BYTES) {
   return new Promise((fulfil, reject) => {
     let size = 0, chunks = []
     req.on('data', (chunk) => {
       size += chunk.length
-      if (size > MAX_BODY_BYTES) { reject(new Error('request body too large')); req.destroy(); return }
+      if (size > cap) { reject(new Error(`request body too large (cap ${cap} bytes)`)); req.destroy(); return }
       chunks.push(chunk)
     })
     req.on('end', () => {
@@ -552,6 +552,11 @@ async function locateEditable(locateExpert, name) {
 }
 
 const MD_MAX_CHARS = 512 * 1024
+// 创建端点（v0.5）：plugin.json + 团队全员 agent md 一起进一个 JSON body，
+// 64KB 的默认上限装不下多人团队，放宽到与头像上传同档
+const CREATE_BODY_MAX_BYTES = 8 * 1024 * 1024
+// 创建端点里 agents/<file>.md 的文件名白名单（含 agentName 兜底校验共用）
+const AGENT_FILE_RE = /^agents\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$/
 
 // ── Module export ────────────────────────────────────────────────────────
 
@@ -1118,6 +1123,101 @@ module.exports = {
             const job = shareRunJobs.get(id)
             if (job === undefined) { sendJson(res, 404, { error: 'job not found' }); return }
             sendJson(res, 200, { ...job, output: job.output.slice(-32 * 1024) })
+            return
+          }
+
+          // ── 创建端点（v0.5）：AI 生成 → 预览确认 → 写入 dsh 用户库 ──
+          // 与 share/run 共用 job 通道（createShareRunJob 进程内执行器），
+          // cwd 固定为用户库根（生成类动作无需读盘，仅要一个存在的目录）
+
+          // POST /experts-management/api/create/run {prompt} → 起生成任务
+          if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/create/run')) {
+            const body = await readJsonBody(req)
+            if (typeof body.prompt !== 'string' || body.prompt.trim() === '') { sendJson(res, 400, { error: 'body must provide prompt' }); return }
+            await fsP.mkdir(installedDir, { recursive: true })
+            const binary = process.env.EXPERTS_DSH_BIN || 'dsh'
+            const job = createShareRunJob({ binary, prompt: body.prompt, dir: installedDir, jobs: shareRunJobs, logger: ctx.logger, services: shareServices })
+            sendJson(res, 202, { jobId: job.id, status: job.status })
+            return
+          }
+
+          // GET /experts-management/api/create/run?id= → 生成任务状态/输出
+          if (req.method === 'GET' && apiPath.endsWith('/experts-management/api/create/run')) {
+            const id = query.get('id') || ''
+            const job = shareRunJobs.get(id)
+            if (job === undefined) { sendJson(res, 404, { error: 'job not found' }); return }
+            sendJson(res, 200, { ...job, output: job.output.slice(-32 * 1024) })
+            return
+          }
+
+          // POST /experts-management/api/create {pluginJson, agentMd?} | {pluginJson, agents?: [{file, content}]}
+          // agent 型：pluginJson + 单个 agentMd；team 型：pluginJson + 逐成员 agents[]。
+          // 全量先验后写：任一校验失败不落盘；写失败清理半成品目录（ntd create_expert 同款）。
+          if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/create')) {
+            const body = await readJsonBody(req, CREATE_BODY_MAX_BYTES)
+            let plugin
+            try { plugin = JSON.parse(typeof body.pluginJson === 'string' ? body.pluginJson : '') } catch { throw new Error('pluginJson is not valid JSON') }
+            if (plugin === null || typeof plugin !== 'object' || Array.isArray(plugin)) throw new Error('pluginJson must be a JSON object')
+            const name = typeof plugin.name === 'string' ? plugin.name : ''
+            // 注册表硬约束：非 kebab 名的专家会被 skill provider 静默跳过（/expert- 手势永远出不来），必须在创建时就拒绝
+            if (!KEBAB_NAME_RE.test(name)) throw new Error(`expert name must be lowercase kebab-case, got '${name}' (registers the /expert-${name || '?'} gesture)`)
+            if (plugin.expertType !== 'agent' && plugin.expertType !== 'team') throw new Error("expertType must be 'agent' or 'team'")
+            // provider 对空描述的专家同样静默跳过（describe() 为空不入目录）
+            const hasText = (v) => typeof v === 'string' && v.trim() !== ''
+            const describeOk = hasText(plugin.description)
+              || (plugin.profession !== null && typeof plugin.profession === 'object' && (hasText(plugin.profession.zh) || hasText(plugin.profession.en)))
+              || (plugin.displayDescription !== null && typeof plugin.displayDescription === 'object' && (hasText(plugin.displayDescription.zh) || hasText(plugin.displayDescription.en)))
+            if (!describeOk) throw new Error('expert needs a non-empty description/profession/displayDescription (the skill registry skips empty ones)')
+
+            const target = join(installedDir, name)
+            const exists = await fsP.stat(target).then(() => true).catch(() => false)
+            if (exists) throw new Error(`expert '${name}' already exists in the dsh library`)
+
+            const files = []
+            if (plugin.expertType === 'agent') {
+              const agentMd = typeof body.agentMd === 'string' ? body.agentMd : ''
+              if (agentMd.trim() === '') throw new Error('agentMd must be a non-empty string')
+              if (agentMd.length > MD_MAX_CHARS) throw new Error(`agentMd exceeds ${MD_MAX_CHARS} chars`)
+              const agentName = hasText(plugin.agentName) ? plugin.agentName : name
+              if (!AGENT_FILE_RE.test(`agents/${agentName}.md`)) throw new Error(`agentName must be plain ascii id, got '${agentName}'`)
+              plugin.agentName = agentName
+              plugin.agents = [`./agents/${agentName}.md`]
+              files.push({ rel: `agents/${agentName}.md`, content: agentMd })
+            } else {
+              const list = Array.isArray(body.agents) ? body.agents : []
+              if (list.length === 0) throw new Error('agents must be a non-empty array of {file, content}')
+              if (list.length > 20) throw new Error('agents supports at most 20 member files')
+              const agentRels = []
+              const stems = new Set()
+              const seenFiles = new Set()
+              for (const item of list) {
+                const file = typeof item === 'object' && item !== null && typeof item.file === 'string' ? item.file : ''
+                if (!AGENT_FILE_RE.test(file)) throw new Error(`invalid agent file name: '${file}' (expected agents/<id>.md)`)
+                if (seenFiles.has(file)) throw new Error(`duplicate agent file: '${file}'`)
+                seenFiles.add(file)
+                const content = typeof item.content === 'string' ? item.content : ''
+                if (content.trim() === '') throw new Error(`agent file '${file}' content must be non-empty`)
+                if (content.length > MD_MAX_CHARS) throw new Error(`agent file '${file}' exceeds ${MD_MAX_CHARS} chars`)
+                stems.add(basename(file).replace(/\.md$/, ''))
+                agentRels.push(`./${file}`)
+                files.push({ rel: file, content })
+              }
+              const lead = plugin.teamInfo !== null && typeof plugin.teamInfo === 'object' && typeof plugin.teamInfo.leadAgent === 'string' ? plugin.teamInfo.leadAgent : ''
+              if (!stems.has(lead)) throw new Error(`teamInfo.leadAgent '${lead || '(missing)'}' must match one of the agents files`)
+              plugin.agentName = lead
+              plugin.agents = agentRels
+            }
+
+            try {
+              await fsP.mkdir(join(target, '.codebuddy-plugin'), { recursive: true })
+              await atomicWriteJs(join(target, PLUGIN_JSON_REL), JSON.stringify(plugin, null, 2))
+              for (const f of files) await atomicWriteJs(join(target, f.rel), f.content)
+            } catch (e) {
+              await fsP.rm(target, { recursive: true, force: true }).catch(() => {})
+              throw e
+            }
+            invalidate()
+            sendJson(res, 201, { created: { name, expertType: plugin.expertType, dir: displayPath(target), agents: files.map((f) => f.rel) } })
             return
           }
 

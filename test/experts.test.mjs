@@ -622,3 +622,106 @@ test('share run：POST 建 job、GET 轮询、参数缺失 400', async () => {
     assert.equal(miss.status, 404)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+// ── 创建端点（v0.5）：AI 生成 → 预览确认 → 写入用户库 ─────────────────────
+
+test('create POST：agent 型写入用户库、plugin.agents 补全、触发注册表失效', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-experts-create-'))
+  try {
+    const installed = join(root, 'installed')
+    await mkdir(installed, { recursive: true })
+    const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: installed })
+    const res = await env.call('POST', '/experts-management/api/create', {
+      pluginJson: JSON.stringify({
+        name: 'rust-backend-architect', expertType: 'agent',
+        displayName: { zh: 'Rust 架构师', en: 'Rust Architect' },
+        profession: { zh: '后端架构师', en: 'Backend Architect' },
+      }),
+      agentMd: '---\nname: rust-backend-architect\ndescription: d\n---\n正文',
+    })
+    assert.equal(res.status, 201)
+    assert.equal(res.payload.created.expertType, 'agent')
+    const raw = JSON.parse(await readFile(join(installed, 'rust-backend-architect', '.codebuddy-plugin', 'plugin.json'), 'utf8'))
+    assert.deepEqual(raw.agents, ['./agents/rust-backend-architect.md']) // 缺失的 agents 字段补全
+    assert.equal(raw.agentName, 'rust-backend-architect')
+    const md = await readFile(join(installed, 'rust-backend-architect', 'agents', 'rust-backend-architect.md'), 'utf8')
+    assert.match(md, /^---\nname: rust-backend-architect/)
+    assert.ok(env.getInvalidations() >= 1)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('create POST：team 型逐成员落盘且顺序保留；非法载荷全部拒绝且不落盘', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-experts-create-team-'))
+  const oldBin = process.env.EXPERTS_DSH_BIN
+  try {
+    const installed = join(root, 'installed')
+    await mkdir(installed, { recursive: true })
+    const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: installed })
+    const pluginJson = JSON.stringify({
+      name: 'review-team', expertType: 'team',
+      displayName: { zh: '评审团', en: 'Review Team' },
+      profession: { zh: '代码评审', en: 'Code Review' },
+      teamInfo: { leadAgent: 'lead', memberAgents: ['member'] },
+    })
+    const agents = [
+      { file: 'agents/lead.md', content: '---\nname: lead\n---\n负责人' },
+      { file: 'agents/member.md', content: '---\nname: member\n---\n成员' },
+    ]
+    const ok = await env.call('POST', '/experts-management/api/create', { pluginJson, agents })
+    assert.equal(ok.status, 201)
+    assert.deepEqual(ok.payload.created.agents, ['agents/lead.md', 'agents/member.md'])
+    const raw = JSON.parse(await readFile(join(installed, 'review-team', '.codebuddy-plugin', 'plugin.json'), 'utf8'))
+    assert.deepEqual(raw.agents, ['./agents/lead.md', './agents/member.md'])
+    assert.equal(raw.agentName, 'lead')
+    assert.match(await readFile(join(installed, 'review-team', 'agents', 'member.md'), 'utf8'), /成员/)
+
+    // 非法载荷逐个拒绝，且用户库保持只有 review-team 一个目录
+    const rejects = [
+      ['name 非 kebab（注册表会静默跳过，必须创建时拒绝）', { pluginJson: JSON.stringify({ name: '中文专家', expertType: 'agent', profession: { zh: 'x' } }), agentMd: 'x' }],
+      ['expertType 非法', { pluginJson: JSON.stringify({ name: 'a-b', expertType: 'workflow', profession: { zh: 'x' } }), agentMd: 'x' }],
+      ['空描述（provider 会跳过空描述专家）', { pluginJson: JSON.stringify({ name: 'a-b', expertType: 'agent' }), agentMd: 'x' }],
+      ['agentMd 缺失', { pluginJson: JSON.stringify({ name: 'a-b', expertType: 'agent', profession: { zh: 'x' } }) }],
+      ['team leadAgent 不对齐', { pluginJson: JSON.stringify({ name: 'b-c', expertType: 'team', profession: { zh: 'x' }, teamInfo: { leadAgent: 'ghost' } }), agents: [{ file: 'agents/lead.md', content: 'x' }] }],
+      ['team 文件名越界', { pluginJson: JSON.stringify({ name: 'c-d', expertType: 'team', profession: { zh: 'x' }, teamInfo: { leadAgent: 'a' } }), agents: [{ file: 'agents/../escape.md', content: 'x' }] }],
+      ['team 文件重名', { pluginJson: JSON.stringify({ name: 'd-e', expertType: 'team', profession: { zh: 'x' }, teamInfo: { leadAgent: 'a' } }), agents: [{ file: 'agents/a.md', content: 'x' }, { file: 'agents/a.md', content: 'y' }] }],
+      ['agents 空数组', { pluginJson: JSON.stringify({ name: 'e-f', expertType: 'team', profession: { zh: 'x' }, teamInfo: { leadAgent: 'a' } }), agents: [] }],
+    ]
+    for (const [label, body] of rejects) {
+      const bad = await env.call('POST', '/experts-management/api/create', body)
+      assert.equal(bad.status, 400, label)
+    }
+    // 同名拒绝（已存在）
+    const dup = await env.call('POST', '/experts-management/api/create', { pluginJson, agents })
+    assert.equal(dup.status, 400)
+    const dirs = (await import('node:fs/promises')).readdir
+    const entries = await dirs(installed)
+    assert.deepEqual(entries.sort(), ['review-team'])
+  } finally {
+    if (oldBin === undefined) delete process.env.EXPERTS_DSH_BIN
+    else process.env.EXPERTS_DSH_BIN = oldBin
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('create/run：POST 起 job、GET 轮询、参数缺失 400、未知 id 404', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-experts-crerun-'))
+  const oldBin = process.env.EXPERTS_DSH_BIN
+  process.env.EXPERTS_DSH_BIN = 'definitely-not-a-binary-xyz' // spawn 错误异步落地，不真起 dsh
+  try {
+    const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: join(root, 'installed') })
+    const noPrompt = await env.call('POST', '/experts-management/api/create/run', {})
+    assert.equal(noPrompt.status, 400)
+    const started = await env.call('POST', '/experts-management/api/create/run', { prompt: '生成一个测试专家' })
+    assert.equal(started.status, 202)
+    assert.ok(started.payload.jobId)
+    const poll = await env.call('GET', '/experts-management/api/create/run?id=' + started.payload.jobId)
+    assert.equal(poll.status, 200)
+    assert.ok(['running', 'done', 'failed', 'error'].includes(poll.payload.status))
+    const miss = await env.call('GET', '/experts-management/api/create/run?id=nope')
+    assert.equal(miss.status, 404)
+  } finally {
+    if (oldBin === undefined) delete process.env.EXPERTS_DSH_BIN
+    else process.env.EXPERTS_DSH_BIN = oldBin
+    await rm(root, { recursive: true, force: true })
+  }
+})
