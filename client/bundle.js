@@ -17,6 +17,11 @@ window.__ModuleLoader__.load({
      *
      * ActionShareDialog props：
      *   title / hint / rows: [[label, value], ...] / initialPrompt
+     *   params: [{ key, label?, placeholder?, multiline?, value? }]  — 可选；模板参数
+     *     输入区（idle 态渲染在 prompt 上方），值实时替换进 prompt 的 {{key}} 占位符
+     *   completedView: ({ job, output, close, retry }) => node  — 可选；完成态插槽，
+     *     提供后 job done 不再渲染默认「输出原文」，改由插槽全权负责（如解析 AI 输出
+     *     成可编辑表单 + 创建按钮），Dialog footer 同时置空，操作按钮由插槽自承
      *   run: async (prompt) => { jobId }      — 发起执行
      *   poll: async (jobId) => { status, output, code }
      *   labels: { copy, copied, run, running, done, failed, outputLabel, openSession, close }
@@ -37,8 +42,10 @@ window.__ModuleLoader__.load({
         var h = React.createElement
         var useState = React.useState
         var useEffect = React.useEffect
+        var useRef = React.useRef
         var doFetch = options.fetch || (typeof fetch !== 'undefined' ? fetch : null)
         var inputStyle = { width: '100%', minHeight: 190, resize: 'vertical', fontFamily: 'var(--dsw-font-family)', lineHeight: 1.6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-2,transparent)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3))', borderRadius: '8px', padding: '10px', boxSizing: 'border-box' }
+        var paramStyle = { width: '100%', fontFamily: 'var(--dsw-font-family)', lineHeight: 1.5, fontSize: 13, background: 'var(--dsw-alias-bg-layer-2,transparent)', color: 'inherit', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3))', borderRadius: '8px', padding: '6px 10px', boxSizing: 'border-box' }
         var btnStyle = { background: 'transparent', color: 'inherit', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3))', borderRadius: '8px', padding: '5px 12px', fontSize: 13, cursor: 'pointer', font: 'inherit' }
         // 主按钮亮暗跟随：与 skills-management .sk-btn-primary 同款 token 组合
         var primaryStyle = Object.assign({}, btnStyle, { background: 'var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,#4a7dff))', borderColor: 'transparent', color: 'var(--dsw-alias-label-primary-inverted,#fff)' })
@@ -47,8 +54,23 @@ window.__ModuleLoader__.load({
           var title = props.title
           var hint = props.hint
           var labels = props.labels || {}
+          // 模板参数定义（[{key,label,placeholder,multiline,value}]）→ 值表
+          var paramDefs = Array.isArray(props.params) ? props.params : []
+          var initialParamValues = {}
+          for (var pi = 0; pi < paramDefs.length; pi++) {
+            var def = paramDefs[pi]
+            initialParamValues[def.key] = def.value !== undefined && def.value !== null ? String(def.value) : ''
+          }
+          var _pv = useState(initialParamValues)
+          var paramValues = _pv[0]; var setParamValues = _pv[1]
           var _p = useState(props.initialPrompt || '')
           var prompt = _p[0]; var setPrompt = _p[1]
+          // 「上次自动生成的 prompt」ref 镜像：effect 里比较当前 prompt 是否等于它，
+          // 判断用户是否手动编辑过——未手改则参数/模板变化可安全覆盖，手改过则保留
+          // 手动编辑（ntd ActionButton 的 lastGenerated 同款规则）。旧 dirty 单标记
+          // 无法表达「手改后又想让参数替换生效」的场景，且要同时服务 initialPrompt
+          // 异步到位的跟随行为，故统一收敛到这一处比较。
+          var lastGeneratedRef = useRef(null)
           var _j = useState(null)
           var job = _j[0]; var setJob = _j[1]
           var _b = useState(false)
@@ -57,13 +79,14 @@ window.__ModuleLoader__.load({
           var copied = _c[0]; var setCopied = _c[1]
           var _e = useState('')
           var error = _e[0]; var setError = _e[1]
-          var _d = useState(false)
-          var dirty = _d[0]; var setDirty = _d[1]
 
-          // initialPrompt 异步到位（如宿主先要下发真实路径）时跟随刷新；用户编辑过则不打断
+          // 参数值/模板变化 → 重新生成 prompt；仅当用户未手改时覆盖
           useEffect(function () {
-            if (!dirty) setPrompt(props.initialPrompt || '')
-          }, [props.initialPrompt])
+            var generated = substituteParams(props.initialPrompt || '', paramValues)
+            var userEdited = lastGeneratedRef.current !== null && prompt !== lastGeneratedRef.current
+            lastGeneratedRef.current = generated
+            if (!userEdited) setPrompt(generated)
+          }, [props.initialPrompt, paramValues])
 
           useEffect(function () {
             if (job === null || job.status !== 'running' || typeof props.poll !== 'function') return
@@ -74,6 +97,15 @@ window.__ModuleLoader__.load({
             }, 1500)
             return function () { clearInterval(timer) }
           }, [job !== null && job.jobId])
+
+          var setParam = function (key, value) {
+            setParamValues(function (prev) {
+              var next = {}
+              for (var k in prev) next[k] = prev[k]
+              next[key] = value
+              return next
+            })
+          }
 
           var doRun = function () {
             if (typeof props.run !== 'function') return
@@ -90,6 +122,8 @@ window.__ModuleLoader__.load({
             }
           }
           var statusText = job === null ? '' : job.status === 'running' ? (labels.running || 'running') : job.status === 'done' ? (labels.done || 'done') : (labels.failed || 'failed') + (job.code != null ? ' (' + job.code + ')' : '')
+          // 完成态插槽：提供后 job done 由插槽全权渲染（footer 置空，操作按钮插槽自承）
+          var completedSlot = typeof props.completedView === 'function' && job !== null && job.status === 'done'
 
           return h('div', { onClick: function (e) { if (e.target === e.currentTarget && props.onClose) props.onClose() }, style: { position: 'fixed', inset: 0, zIndex: 2147483000, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
             h('div', { style: { width: 'min(640px,92vw)', maxHeight: '86vh', overflow: 'auto', background: 'var(--dsw-alias-bg-layer-1,#fff)', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3))', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', gap: 12, color: 'var(--dsw-alias-label-primary,inherit)', font: 'var(--dsw-font-family,inherit)' } },
@@ -97,16 +131,27 @@ window.__ModuleLoader__.load({
                 h('div', { style: { fontSize: 17, fontWeight: 600 } }, title || ''),
                 h('button', { onClick: props.onClose, style: Object.assign({}, btnStyle, { marginLeft: 'auto', width: 28, height: 28, padding: 0, borderRadius: 28 }) }, '✕')),
               hint ? h('div', { style: { fontSize: 12, opacity: .7 } }, hint) : null,
+              // 模板参数输入区（idle 态；值实时替换进 prompt，位于 prompt 上方与 ntd 同布局）
+              paramDefs.length > 0 ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+                paramDefs.map(function (d) {
+                  return h('label', { key: d.key, style: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, opacity: .85 } },
+                    h('span', null, d.label || d.key),
+                    d.multiline
+                      ? h('textarea', { value: paramValues[d.key] || '', placeholder: d.placeholder || '', onChange: function (e) { setParam(d.key, e.target.value) }, spellCheck: false, style: Object.assign({}, paramStyle, { minHeight: 64, resize: 'vertical' }) })
+                      : h('input', { value: paramValues[d.key] || '', placeholder: d.placeholder || '', onChange: function (e) { setParam(d.key, e.target.value) }, style: paramStyle }))
+                })) : null,
               (props.rows || []).length > 0 ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 } },
                 props.rows.map(function (r, i) {
                   return r[1] ? h('div', { key: i }, h('b', null, r[0] + '：'), h('span', null, r[1])) : null
                 })) : null,
-              h('textarea', { value: prompt, onChange: function (e) { setDirty(true); setPrompt(e.target.value) }, spellCheck: false, style: inputStyle }),
+              h('textarea', { value: prompt, onChange: function (e) { setPrompt(e.target.value) }, spellCheck: false, style: inputStyle }),
               error !== '' ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-state-error,#c75050)' } }, error) : null,
-              job !== null ? h('div', null,
-                h('div', { style: { fontSize: 12, opacity: .7, margin: '4px 0' } }, (labels.outputLabel || 'Output') + ' · ' + statusText),
-                h('pre', { style: { maxHeight: 220, margin: 0, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 12, background: 'var(--dsw-alias-bg-layer-2,transparent)', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2))', borderRadius: '8px', padding: '8px' } }, job.output || '…')) : null,
-              h('div', { style: { display: 'flex', gap: 8 } },
+              completedSlot
+                ? props.completedView({ job: job, output: job.output || '', close: props.onClose, retry: doRun })
+                : (job !== null ? h('div', null,
+                    h('div', { style: { fontSize: 12, opacity: .7, margin: '4px 0' } }, (labels.outputLabel || 'Output') + ' · ' + statusText),
+                    h('pre', { style: { maxHeight: 220, margin: 0, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 12, background: 'var(--dsw-alias-bg-layer-2,transparent)', border: '1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2))', borderRadius: '8px', padding: '8px' } }, job.output || '…')) : null),
+              completedSlot ? null : h('div', { style: { display: 'flex', gap: 8 } },
                 canOpenSession ? h('button', { onClick: openSession, style: btnStyle }, labels.openSession || 'Open chat') : null,
                 h('button', { onClick: copy, style: btnStyle }, copied ? (labels.copied || 'Copied') : (labels.copy || 'Copy')),
                 h('button', { onClick: doRun, disabled: busy || (job !== null && job.status === 'running'), style: primaryStyle }, job !== null && job.status === 'running' ? (labels.running || 'Running…') : (labels.run || 'Run')))))
@@ -190,7 +235,7 @@ window.__ModuleLoader__.load({
       tabMine: '我的',
       tabBuiltin: '内置',
       searchPlaceholder: '搜索专家名称、职业、描述…',
-      mineEmpty: '用户库还没有专家。去「内置」页浏览并安装。',
+      mineEmpty: '用户库还没有专家。去「内置」页浏览安装，或点上方按钮 AI 创建。',
       builtinEmpty: '内置专家为空。请在设置中同步内置仓库。',
       expertTypeAgent: '专家',
       expertTypeTeam: '团队',
@@ -280,6 +325,24 @@ window.__ModuleLoader__.load({
       pickerEmpty: '没有匹配的专家',
       pickerTabAgents: '专家',
       pickerTabTeams: '专家团',
+      createExpertBtn: 'AI 创建专家',
+      createTeamBtn: 'AI 创建专家团',
+      createTitleAgent: 'AI 创建专家',
+      createTitleTeam: 'AI 创建专家团',
+      createHint: '描述你想要的专家，AI 生成 plugin.json 与角色定义；确认或修改后写入用户库。',
+      createParamDescription: '专家描述',
+      createParamPlaceholder: '一句话描述，如：精通 Rust 的后端架构师',
+      createParseFailed: 'AI 输出不符合约定格式（未找到代码块），可修改描述重试',
+      createReady: 'AI 已生成专家定义，确认无误后点击创建',
+      createNow: '创建',
+      creating: '创建中…',
+      createdDone: '已创建专家 {name}',
+      createInvalidJson: 'plugin.json 格式无效',
+      createTypeMismatch: '生成的 expertType 与所选类型不符',
+      createLeadMissing: 'teamInfo.leadAgent 未对齐任何成员文件',
+      createEmptyFile: '角色定义内容不能为空',
+      retry: '重试',
+      teamAgentFiles: '成员角色定义',
     }
 
     const EN = {
@@ -288,7 +351,7 @@ window.__ModuleLoader__.load({
       tabMine: 'Mine',
       tabBuiltin: 'Built-in',
       searchPlaceholder: 'Search experts by name, profession, description…',
-      mineEmpty: 'No experts in the user library yet. Browse the Built-in tab and install one.',
+      mineEmpty: 'No experts in the user library yet. Browse the Built-in tab and install one, or create one with the buttons above.',
       builtinEmpty: 'Built-in experts are empty. Sync the built-in repo in settings.',
       expertTypeAgent: 'Expert',
       expertTypeTeam: 'Team',
@@ -378,6 +441,24 @@ window.__ModuleLoader__.load({
       pickerEmpty: 'No matching experts',
       pickerTabAgents: 'Experts',
       pickerTabTeams: 'Teams',
+      createExpertBtn: 'AI Create Expert',
+      createTeamBtn: 'AI Create Expert Team',
+      createTitleAgent: 'AI Create Expert',
+      createTitleTeam: 'AI Create Expert Team',
+      createHint: 'Describe the expert you want; AI generates plugin.json and role definitions. Review or edit, then save into the user library.',
+      createParamDescription: 'Expert description',
+      createParamPlaceholder: 'One sentence, e.g. a Rust backend architect',
+      createParseFailed: 'AI output does not follow the agreed format (code blocks not found) — edit the description and retry',
+      createReady: 'AI generated the expert definition — review and click Create',
+      createNow: 'Create',
+      creating: 'Creating…',
+      createdDone: 'Expert {name} created',
+      createInvalidJson: 'Invalid plugin.json',
+      createTypeMismatch: 'Generated expertType does not match the selected kind',
+      createLeadMissing: 'teamInfo.leadAgent does not match any member file',
+      createEmptyFile: 'Role definition content must not be empty',
+      retry: 'Retry',
+      teamAgentFiles: 'Member role definitions',
     }
 
     // ── Styles ───────────────────────────────────────────────────────────────
@@ -827,6 +908,106 @@ window.__ModuleLoader__.load({
       '- 全程与最终汇报都使用中文。',
     ].join('\n')
 
+    // ── AI 创建专家（ntd ExpertCreateModal 同款：一句话描述 → 围栏输出 → 预览确认 → 落盘）──
+
+    /** 创建型模板共用的输出纪律：除约定围栏外禁止出现任何代码围栏——
+     *  执行器输出是流式全文（含中间叙述与 [tool] 行），前端按围栏解析，多余围栏会污染提取。 */
+    const EXPERT_CREATE_OUTPUT_RULES = [
+      '## 输出格式（严格遵守）',
+      '- 只输出约定的代码块，代码块之外不要输出任何解释、标题或结论。',
+      '- 正文中不要出现任何其他代码围栏（```）。',
+      '- 所有展示文案（displayName/profession/displayDescription/tags/提示词）中英双语，正文内容用中文。',
+      '- 不要输出 avatar 字段（头像暂不支持，缺省即用默认图标）。',
+    ].join('\n')
+
+    const EXPERT_CREATE_CATEGORY_LIST = [
+      '01-ProductDesign（产品设计）', '02-Engineering（工程技术）', '03-GameSpatial（游戏与空间）',
+      '04-DataAI（数据与 AI）', '06-ContentCreative（内容与创意）', '08-FinanceInvestment（金融投资）',
+      '10-ProjectQuality（项目质量）', '11-SecurityCompliance（安全合规）', '12-IndustryConsultant（行业咨询）',
+    ].join('、')
+
+    const EXPERT_CREATE_PROMPT_AGENT = [
+      '你是专家系统设计师。根据用户的描述，生成一个完整的专家定义（ntd/WorkBuddy 格式：plugin.json + agent.md）。',
+      '',
+      '用户描述：{{description}}',
+      '',
+      '第一步：用 ```json 围栏输出完整 plugin.json，字段要求：',
+      '- name: 专家 ID，只允许小写字母/数字/连字符（如 rust-backend-architect），与描述语义相符',
+      '- version: "1.0.0"；expertType: "agent"',
+      '- description: 一句话英文简介',
+      '- displayName / profession / displayDescription: {zh, en} 双语对象',
+      `- categoryId: 从这些值里选一个：${EXPERT_CREATE_CATEGORY_LIST}`,
+      '- tags: [{zh, en}]，至少 3 个',
+      '- agentName: 与 name 相同；agents: ["./agents/<name>.md"]',
+      '- defaultInitPrompt: {zh, en}；quickPrompts: [{zh, en}] 至少 2 条',
+      '',
+      '第二步：用 ```markdown 围栏输出完整 agent.md：',
+      '- 开头 YAML frontmatter：name（=plugin.json 的 agentName）、description、color（英文颜色词）、emoji、vibe',
+      '- 正文中文撰写，包含：身份与记忆、核心使命、专业技能、工作流程、约束规则等章节，内容专业、具体、可执行',
+      '',
+      EXPERT_CREATE_OUTPUT_RULES,
+    ].join('\n')
+
+    const EXPERT_CREATE_PROMPT_TEAM = [
+      '你是专家团队设计师。根据用户的描述，生成一个完整的专家团队定义（ntd/WorkBuddy 格式，expertType=team：一名负责人 + 若干成员，各带角色定义文件）。',
+      '',
+      '用户描述：{{description}}',
+      '',
+      '第一步：用 ```json 围栏输出完整 plugin.json，字段要求：',
+      '- name: 团队 ID，只允许小写字母/数字/连字符（如 fullstack-delivery-team）',
+      '- version: "1.0.0"；expertType: "team"',
+      '- description: 一句话英文简介',
+      '- displayName / profession / displayDescription: 团队级 {zh, en} 双语对象',
+      `- categoryId: 从这些值里选一个：${EXPERT_CREATE_CATEGORY_LIST}`,
+      '- tags: [{zh, en}]，至少 3 个',
+      '- 成员规模 3–6 人（含负责人），按描述合理分工，成员 id 全部为小写字母/数字/连字符',
+      '- agentName: 负责人成员 id',
+      '- teamInfo: { "leadAgent": "<负责人id>", "memberAgents": ["<成员id>", ...] }（不含负责人）',
+      '- agents: ["./agents/<id>.md", ...]，负责人的文件必须排在第一个',
+      '- members: [{ "id", "name": {zh,en}, "displayName": {zh,en}, "profession": {zh,en}, "role": "lead"|"member" }]，id 与 agents 文件一一对应',
+      '- defaultInitPrompt: {zh, en}；quickPrompts: [{zh, en}] 至少 2 条',
+      '',
+      '第二步：逐成员输出角色定义——每个成员一个 ```markdown agents/<成员id>.md 围栏（围栏起始行必须带上该文件路径），负责人的块排第一：',
+      '- 每个文件开头 YAML frontmatter：name（=成员 id）、description、color（英文颜色词）、emoji、vibe',
+      '- 正文中文撰写：身份与记忆、核心使命、专业技能、工作流程、约束规则；写明在团队中的分工与交接关系（负责人负责任务拆分与汇总）',
+      '',
+      EXPERT_CREATE_OUTPUT_RULES,
+    ].join('\n')
+
+    /** 创建模板注册表：key = expertType，入口按钮只是预选条目的快捷方式。 */
+    const CREATE_TEMPLATES = {
+      agent: { key: 'agent', btnKey: 'createExpertBtn', titleKey: 'createTitleAgent', prompt: EXPERT_CREATE_PROMPT_AGENT },
+      team: { key: 'team', btnKey: 'createTeamBtn', titleKey: 'createTitleTeam', prompt: EXPERT_CREATE_PROMPT_TEAM },
+    }
+
+    /**
+     * 解析 AI 生成输出 → 创建载荷（纯函数，便于测试）。
+     * 执行器 output 是流式全文（含 [tool] 行与中间叙述），按围栏标签提取：
+     * agent 型取第一个 ```json + 第一个 ```markdown；team 型取 ```json +
+     * 全部带路径标注的 ```markdown agents/<id>.md（同名去重，按出现顺序）。
+     * 围栏缺失 → { ok:false, raw }，UI 展示原文并允许重试。
+     */
+    function parseCreateResult(output, type) {
+      const text = String(output || '')
+      const jsonMatch = text.match(/```json[ \t]*\r?\n([\s\S]*?)```/)
+      if (!jsonMatch) return { ok: false, raw: text }
+      const pluginJson = jsonMatch[1].trim()
+      if (type === 'team') {
+        const files = []
+        const re = /```markdown[ \t]+([^\s`]+)[ \t]*\r?\n([\s\S]*?)```/g
+        let m
+        while ((m = re.exec(text)) !== null) {
+          const file = m[1].trim()
+          if (!files.some((f) => f.file === file)) files.push({ file, content: m[2].trim() })
+        }
+        if (files.length === 0) return { ok: false, raw: text }
+        return { ok: true, pluginJson, files }
+      }
+      const mdMatch = text.match(/```markdown[ \t]*\r?\n([\s\S]*?)```/)
+      if (!mdMatch) return { ok: false, raw: text }
+      return { ok: true, pluginJson, agentMd: mdMatch[1].trim() }
+    }
+
     function DetailModal({ name, source, t, onClose, onInstalled, onDeleted, onToast, onOpenSession }) {
       const [detail, setDetail] = useState(null)
       const [error, setError] = useState('')
@@ -1130,6 +1311,99 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: busy || status.syncing, onClick: sync }, busy || status.syncing ? t('syncing') : t('syncNow'))))))
     }
 
+    // ── AI 创建专家：对话框（消费 kit 的 params + completedView 扩展）──────────
+
+    const CREATE_AREA_STYLE = { width: '100%', minHeight: '200px', fontFamily: 'ui-monospace,monospace', fontSize: '12px', lineHeight: 1.6, whiteSpace: 'pre-wrap', boxSizing: 'border-box', resize: 'vertical' }
+
+    /**
+     * 创建完成态：解析执行器输出 → 可编辑预览（plugin.json + 角色定义）→ POST /api/create。
+     * 解析失败展示原文 + 重试（ntd ExpertCreateCompleted 同款三态：可解析/不可解析/错误）。
+     */
+    function CreateCompleted({ t, type, ctx, onCreated }) {
+      const parsed = useMemo(() => parseCreateResult(ctx.output, type), [ctx.output, type])
+      const [pluginText, setPluginText] = useState(parsed.pluginJson || '')
+      const [agentMd, setAgentMd] = useState(parsed.agentMd || '')
+      const [files, setFiles] = useState(Array.isArray(parsed.files) ? parsed.files : [])
+      const [creating, setCreating] = useState(false)
+      const [error, setError] = useState('')
+      if (!parsed.ok) {
+        return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+          h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, t('createParseFailed')),
+          h('pre', { className: 'exp-pre', style: { maxHeight: 260 } }, parsed.raw),
+          h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
+            h('button', { className: 'exp-btn', onClick: ctx.close }, t('close')),
+            h('button', { className: 'exp-btn', 'data-primary': 'true', onClick: ctx.retry }, t('retry'))))
+      }
+      let preview = null
+      try { preview = JSON.parse(pluginText) } catch { preview = null }
+      const leadFile = preview !== null && preview.teamInfo !== null && typeof preview.teamInfo === 'object' && typeof preview.teamInfo.leadAgent === 'string'
+        ? `agents/${preview.teamInfo.leadAgent}.md` : ''
+      const create = async () => {
+        setError('')
+        let plugin
+        try { plugin = JSON.parse(pluginText) } catch { plugin = null }
+        if (plugin === null || typeof plugin !== 'object' || Array.isArray(plugin)) { setError(t('createInvalidJson')); return }
+        if (plugin.expertType !== type) { setError(t('createTypeMismatch')); return }
+        const body = { pluginJson: pluginText }
+        if (type === 'agent') {
+          if (typeof agentMd !== 'string' || agentMd.trim() === '') { setError(t('createEmptyFile')); return }
+          body.agentMd = agentMd
+        } else {
+          if (!Array.isArray(files) || files.length === 0) { setError(t('createEmptyFile')); return }
+          for (const f of files) {
+            if (typeof f.content !== 'string' || f.content.trim() === '') { setError(t('createEmptyFile')); return }
+          }
+          body.agents = files.map((f) => ({ file: f.file, content: f.content }))
+        }
+        setCreating(true)
+        try {
+          const r = await fetchJson(`${API}/create`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+          onCreated((r.created && r.created.name) || plugin.name)
+          ctx.close()
+        } catch (e) { setError(String(e && e.message)) } finally { setCreating(false) }
+      }
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+        h('div', { className: 'exp-checkline' }, '✅', t('createReady')),
+        preview !== null ? h('div', { className: 'exp-kv' },
+          h('b', null, preview.expertType === 'team' ? t('expertTypeTeam') : t('expertTypeAgent')),
+          h('span', null, (preview.displayName && (preview.displayName.zh || preview.displayName.en)) || preview.name || '')) : null,
+        h('div', null,
+          h('div', { className: 'exp-section-title', style: { margin: '4px 0' } }, t('pluginJson')),
+          h('textarea', { className: 'exp-input', value: pluginText, onChange: (e) => setPluginText(e.target.value), spellCheck: false, style: CREATE_AREA_STYLE })),
+        type === 'agent'
+          ? h('div', null,
+              h('div', { className: 'exp-section-title', style: { margin: '4px 0' } }, t('agents')),
+              h('textarea', { className: 'exp-input', value: agentMd, onChange: (e) => setAgentMd(e.target.value), spellCheck: false, style: CREATE_AREA_STYLE }))
+          : h('div', null,
+              h('div', { className: 'exp-section-title', style: { margin: '4px 0' } }, t('teamAgentFiles')),
+              ...files.map((f, i) => h('div', { key: f.file, style: { marginBottom: 8 } },
+                h('div', { className: 'exp-section-title', style: { margin: '4px 0' } }, `${f.file}${f.file !== '' && f.file === leadFile ? ' ★' : ''}`),
+                h('textarea', { className: 'exp-input', value: f.content, onChange: (e) => setFiles(files.map((x, j) => (j === i ? { ...x, content: e.target.value } : x))), spellCheck: false, style: CREATE_AREA_STYLE })))),
+        error !== '' ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, error) : null,
+        h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 8, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
+          h('button', { className: 'exp-btn', onClick: ctx.close }, t('close')),
+          h('button', { className: 'exp-btn', onClick: ctx.retry }, t('retry')),
+          h('button', { className: 'exp-btn', 'data-primary': 'true', disabled: creating, onClick: create }, creating ? t('creating') : t('createNow'))))
+    }
+
+    /** 创建入口对话框：kit ActionShareDialog 的创建态用法（params 输入 + completedView 接管）。
+     *  两个工具栏按钮各自预选模板条目（CREATE_TEMPLATES[type]），对话框管线与入口无关。 */
+    function CreateExpertDialog({ t, type, onClose, onCreated, onOpenSession }) {
+      const tpl = CREATE_TEMPLATES[type] || CREATE_TEMPLATES.agent
+      return h(getShareDialogComponent(), {
+        title: t(tpl.titleKey),
+        hint: t('createHint'),
+        params: [{ key: 'description', label: t('createParamDescription'), placeholder: t('createParamPlaceholder'), multiline: true }],
+        initialPrompt: tpl.prompt,
+        labels: { copy: t('copyPrompt'), copied: t('copied'), run: t('runBtn'), running: t('running'), done: t('runDone'), failed: t('runFailed'), outputLabel: t('outputLabel'), openSession: t('openChat') },
+        run: (prompt) => fetchJson(`${API}/create/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) }),
+        poll: (id) => fetchJson(`${API}/create/run?id=${encodeURIComponent(id)}`),
+        completedView: (ctx) => h(CreateCompleted, { t, type, ctx, onCreated }),
+        onOpenSession: (sessionId) => { onClose(); if (onOpenSession) onOpenSession(sessionId) },
+        onClose,
+      })
+    }
+
     // ── Page ─────────────────────────────────────────────────────────────────
 
     function ExpertsPage({ t, embedded, onClose }) {
@@ -1139,6 +1413,7 @@ window.__ModuleLoader__.load({
       const [search, setSearch] = useState('')
       const [selected, setSelected] = useState(null) // {name, source}
       const [settingsOpen, setSettingsOpen] = useState(false)
+      const [createType, setCreateType] = useState(null) // null | 'agent' | 'team'
       const [busyName, setBusyName] = useState(null)
       const [toast, setToast] = useState(null)
       const showToast = (text) => { setToast(text); setTimeout(() => setToast(null), 2600) }
@@ -1188,6 +1463,8 @@ window.__ModuleLoader__.load({
             h('button', { className: 'exp-tab', 'data-on': tab === 'builtin', onClick: () => setTab('builtin') }, `${t('tabBuiltin')}${data ? ` (${data.builtin.length})` : ''}`)),
           h('input', { className: 'exp-input exp-search', placeholder: t('searchPlaceholder'), value: search, onChange: (e) => setSearch(e.target.value) }),
           h('span', { className: 'exp-count' }, `${rows.length}`),
+          tab === 'mine' ? h('button', { className: 'exp-btn', 'data-primary': 'true', title: t('createHint'), onClick: () => setCreateType('agent') }, `⚡ ${t('createExpertBtn')}`) : null,
+          tab === 'mine' ? h('button', { className: 'exp-btn', title: t('createHint'), onClick: () => setCreateType('team') }, `👥 ${t('createTeamBtn')}`) : null,
           tab === 'builtin' ? h('button', { className: 'exp-btn', title: t('builtinSettings'), onClick: () => setSettingsOpen(true) }, t('builtinSettings')) : null),
         error !== '' ? h('div', { className: 'exp-empty' }, `${t('loadFailed')}: ${error}`) : null,
         data !== null && rows.length === 0 ? h('div', { className: 'exp-empty' }, tab === 'mine' ? t('mineEmpty') : t('builtinEmpty')) : null,
@@ -1206,6 +1483,17 @@ window.__ModuleLoader__.load({
         settingsOpen ? h(BuiltinSettingsDialog, {
           t, onClose: () => setSettingsOpen(false), onToast: showToast, onSynced: reload,
         }) : null,
+        createType !== null ? h(CreateExpertDialog, {
+          t, type: createType,
+          onClose: () => setCreateType(null),
+          onCreated: (name) => {
+            setCreateType(null)
+            showToast(t('createdDone', { name }))
+            reload()
+            fetchRoster(true) // composer 候选立即见到新专家（60s TTL 缓存强制失效）
+          },
+          onOpenSession: (sessionId) => { try { sessionsApi.open(sessionId) } catch (e) { showToast(String(e && e.message)) } },
+        }) : null,
         toast !== null ? h('div', { className: 'exp-toast' }, toast) : null)
     }
 
@@ -1218,6 +1506,7 @@ window.__ModuleLoader__.load({
         NS, ZH, EN, matchExpert, formatSize, formatTime, avatarUrl,
         EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource, fetchRoster,
         toRosterRows, insertComposerText, splitRosterByType, pickerRowMatch,
+        parseCreateResult, CREATE_TEMPLATES, EXPERT_CREATE_PROMPT_AGENT, EXPERT_CREATE_PROMPT_TEAM,
       },
       /** Test/host helper: mount a standalone page into any container. */
       __boot(container, opts = {}) {
