@@ -20,6 +20,10 @@
     "./client": "./client/bundle.js",
     "./package.json": "./package.json"
   },
+  "engines": {
+    "node": ">=22.5",
+    "dsh": ">=0.1.2-rc.1"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -39,9 +43,6 @@
     "test": "node --test test/*.test.mjs",
     "build:client": "node scripts/build-client.mjs",
     "prepublishOnly": "npm run build:client && npm run check && npm test"
-  },
-  "engines": {
-    "node": ">=22.5"
   },
   "dependencies": {
     "@weibaohui/dsh-plugin-kit": "^0.3.0",
