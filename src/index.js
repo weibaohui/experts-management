@@ -3,9 +3,9 @@
 /**
  * dsh-plugin-experts-management — Host half
  *
- * Manages ntd-format experts (WorkBuddy plugin.json + Agent MD + skills)
- * WITHOUT touching the ntd application's own directories:
- * - Builtin: ntd-resource's experts/ subtree via git sparse checkout into the
+ * Manages WorkBuddy-compatible experts (plugin.json + Agent MD + skills)
+ * WITHOUT touching the expert apps' own directories:
+ * - Builtin: the ntd-resource repo's experts/ subtree via git sparse checkout into the
  *   plugin's own dir ($DSH_HOME/experts-management/builtin). Read-only shelf;
  *   install copies into the user library.
  * - User library: $DSH_HOME/experts (writable, the only built-in source).
@@ -15,7 +15,7 @@
  *   semantics, name `expert-<name>`). Typing `/expert-<name>` in a message
  *   (or picking it from the composer menu) makes the host's user-explicit
  *   gesture boundary deterministically inject the expert's role prompt —
- *   ntd's three-section injection, zero model-catalog tokens, zero host code.
+ *   WorkBuddy's three-section injection, zero model-catalog tokens, zero host code.
  */
 
 const { createReadStream } = require('node:fs')
@@ -59,7 +59,7 @@ const EXPERT_NAME_PREFIX = 'expert-'
 
 /**
  * Built-in sources: ONLY the dsh user library. ntd 应用自身的目录
- * （~/.ntd/*）一律不扫描不读取；需要纳管其他目录时经 config.extraSources
+ * （如 ~/.ntd/*）一律不扫描不读取；需要纳管其他目录时经 config.extraSources
  * 显式加入（可标 readOnly）。
  */
 const SOURCE_DEFS = [
@@ -153,7 +153,7 @@ function parseSkillMd(content) {
 
 /**
  * 解析 plugin.json → 专家记录的“头部”字段（不含 agent/skill 明细）。
- * 展示字段按 ntd 语义回退：displayName.zh → .en → name。
+ * 展示字段按 WorkBuddy 语义回退：displayName.zh → .en → name。
  */
 function parsePluginJson(raw) {
   const plugin = typeof raw === 'string' ? JSON.parse(raw) : raw
@@ -194,7 +194,7 @@ function parsePluginJson(raw) {
   }
 }
 
-// ── Path safety（ntd resolve_within 语义）────────────────────────────────
+// ── Path safety（resolve_within 语义）────────────────────────────────
 
 /** 解析相对路径并校验仍位于 base 内，防 plugin.json 里的 .. / 绝对路径越界读文件。 */
 function resolveWithin(base, rel) {
@@ -205,7 +205,7 @@ function resolveWithin(base, rel) {
   return undefined
 }
 
-/** ntd is_safe_expert_name：目录名只拒绝路径分隔符、父级引用与控制字符（中文名合法）。 */
+/** WorkBuddy is_safe_expert_name 语义：目录名只拒绝路径分隔符、父级引用与控制字符（中文名合法）。 */
 function isSafeExpertName(name) {
   if (typeof name !== 'string' || name === '') return false
   if (name.includes('/') || name.includes('\\') || name.includes('..')) return false
@@ -216,7 +216,7 @@ function isSafeExpertName(name) {
 // ── Scanning ─────────────────────────────────────────────────────────────
 
 /**
- * 扫描一个专家来源根目录（ntd 语义：只看一层子目录，每个含
+ * 扫描一个专家来源根目录（只看一层子目录，每个含
  * .codebuddy-plugin/plugin.json 的目录是一个专家）。
  * 失败的专家跳过并返回 errors，单个坏专家不拖垮整个市场。
  */
@@ -301,7 +301,7 @@ async function readExpertDir(root, dir, sourceKey) {
   }
 }
 
-/** ntd resolve_agent_name：team 用 leadAgent，agent 用 agentName，最后兜底第一个 agent 文件。 */
+/** resolve_agent_name：team 用 leadAgent，agent 用 agentName，最后兜底第一个 agent 文件。 */
 function resolveLeadAgentFile(expert) {
   const wanted = expert.leadAgent ?? expert.agentName
   if (expert.agentFiles.length === 0) return undefined
@@ -312,9 +312,9 @@ function resolveLeadAgentFile(expert) {
   return expert.agentFiles[0]
 }
 
-// ── Prompt assembly（ntd 三段式注入的 skill-content 适配）────────────────
+// ── Prompt assembly（WorkBuddy 三段式注入的 skill-content 适配）────────────────
 
-/** 技能清单段：名称渲染为指向 SKILL.md 的链接，模型按需读完整定义（ntd build_skills_context）。 */
+/** 技能清单段：名称渲染为指向 SKILL.md 的链接，模型按需读完整定义（build_skills_context）。 */
 function buildSkillsContext(skillMeta) {
   if (!Array.isArray(skillMeta) || skillMeta.length === 0) return ''
   const parts = ['## 可用技能', '你可以使用以下技能来辅助完成任务。技能名称是 markdown 链接，指向技能定义文件，如需了解技能详细用法可查看该文件：', '']
@@ -328,7 +328,7 @@ function buildSkillsContext(skillMeta) {
 
 /**
  * 拼专家 prompt：角色定义 → 可用技能（有才出现）→ 身份说明。
- * ntd 在 todo 执行前拼接“# 任务 + 原消息”；这里内容经宿主手势边界作为
+ * WorkBuddy 在执行前拼接“# 任务 + 原消息”；这里内容经宿主手势边界作为
  * <skill_content> 注入，用户消息随草稿单独送达，故以一句身份说明收尾。
  */
 function buildExpertPrompt(agentMdBody, skillsText, expert) {
@@ -1152,7 +1152,7 @@ module.exports = {
 
           // POST /experts-management/api/create {pluginJson, agentMd?} | {pluginJson, agents?: [{file, content}]}
           // agent 型：pluginJson + 单个 agentMd；team 型：pluginJson + 逐成员 agents[]。
-          // 全量先验后写：任一校验失败不落盘；写失败清理半成品目录（ntd create_expert 同款）。
+          // 全量先验后写：任一校验失败不落盘；写失败清理半成品目录。
           if (req.method === 'POST' && apiPath.endsWith('/experts-management/api/create')) {
             const body = await readJsonBody(req, CREATE_BODY_MAX_BYTES)
             let plugin

@@ -292,7 +292,7 @@ window.__ModuleLoader__.load({
       dirLabel: '目录',
       filesLabel: '文件',
       versionLabel: '版本',
-      sourceReadonly: '只读来源（可在 NTD 中管理，或安装到用户库）',
+      sourceReadonly: '只读来源（可在 WorkBuddy 中管理，或安装到用户库）',
       builtinSettings: '内置设置',
       syncNow: '立即同步',
       syncing: '同步中，可能需要一分钟…',
@@ -408,7 +408,7 @@ window.__ModuleLoader__.load({
       dirLabel: 'Directory',
       filesLabel: 'Files',
       versionLabel: 'Version',
-      sourceReadonly: 'Read-only source (manage in NTD, or install into the user library)',
+      sourceReadonly: 'Read-only source (manage in WorkBuddy, or install into the user library)',
       builtinSettings: 'Built-in settings',
       syncNow: 'Sync now',
       syncing: 'Syncing, may take a minute…',
@@ -882,7 +882,7 @@ window.__ModuleLoader__.load({
 
     let sessionsApi = null // 「打开对话」用的宿主 sessions 服务（apply 时动态注入捕获）
 
-    /** 专家分享提示词：提交到 ntd-resource 的 experts/ 子树（与技能分享同管线、同 token）。 */
+    /** 专家分享提示词：提交到 ntd-resource 市场仓库的 experts/ 子树（与技能分享同管线、同 token）。 */
     const EXPERT_SHARE_PROMPT = [
       '请把本地专家「{{expertName}}」{{version}}打包提交到 GitCode 官方仓库 weibaohui/ntd-resource 的 experts/ 子树，作为一个 PR 供维护者审核。',
       '',
@@ -908,7 +908,7 @@ window.__ModuleLoader__.load({
       '- 全程与最终汇报都使用中文。',
     ].join('\n')
 
-    // ── AI 创建专家（ntd ExpertCreateModal 同款：一句话描述 → 围栏输出 → 预览确认 → 落盘）──
+    // ── AI 创建专家（一句话描述 → 围栏输出 → 预览确认 → 落盘）──
 
     /** 创建型模板共用的输出纪律：除约定围栏外禁止出现任何代码围栏——
      *  执行器输出是流式全文（含中间叙述与 [tool] 行），前端按围栏解析，多余围栏会污染提取。 */
@@ -927,7 +927,7 @@ window.__ModuleLoader__.load({
     ].join('、')
 
     const EXPERT_CREATE_PROMPT_AGENT = [
-      '你是专家系统设计师。根据用户的描述，生成一个完整的专家定义（ntd/WorkBuddy 格式：plugin.json + agent.md）。',
+      '你是专家系统设计师。根据用户的描述，生成一个完整的专家定义（WorkBuddy 兼容格式：plugin.json + agent.md）。',
       '',
       '用户描述：{{description}}',
       '',
@@ -949,7 +949,7 @@ window.__ModuleLoader__.load({
     ].join('\n')
 
     const EXPERT_CREATE_PROMPT_TEAM = [
-      '你是专家团队设计师。根据用户的描述，生成一个完整的专家团队定义（ntd/WorkBuddy 格式，expertType=team：一名负责人 + 若干成员，各带角色定义文件）。',
+      '你是专家团队设计师。根据用户的描述，生成一个完整的专家团队定义（WorkBuddy 兼容格式，expertType=team：一名负责人 + 若干成员，各带角色定义文件）。',
       '',
       '用户描述：{{description}}',
       '',
@@ -1317,7 +1317,7 @@ window.__ModuleLoader__.load({
 
     /**
      * 创建完成态：解析执行器输出 → 可编辑预览（plugin.json + 角色定义）→ POST /api/create。
-     * 解析失败展示原文 + 重试（ntd ExpertCreateCompleted 同款三态：可解析/不可解析/错误）。
+     * 解析失败展示原文 + 重试（三态：可解析/不可解析/错误）。
      */
     function CreateCompleted({ t, type, ctx, onCreated }) {
       const parsed = useMemo(() => parseCreateResult(ctx.output, type), [ctx.output, type])

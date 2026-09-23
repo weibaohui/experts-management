@@ -3,15 +3,15 @@
 [![DSH plugin](https://img.shields.io/badge/dsh-plugin-green)](https://github.com/topics/dsh-plugin)
 [![npm version](https://img.shields.io/npm/v/@weibaohui/experts-management)](https://www.npmjs.com/package/@weibaohui/experts-management)
 
-**专家管理插件**：管理 ntd 格式的专家与专家团队（单个专家 / 多人团队），浏览安装 50+ 内置专家；每个专家注册为「仅用户可调用」的技能，在对话输入框输入 `/expert-名称`（或点 composer 工具行的「＋专家」按钮）即可以该专家的身份执行任务。
+**专家管理插件**：管理 WorkBuddy 兼容格式的专家与专家团队（单个专家 / 多人团队），浏览安装 50+ 内置专家；每个专家注册为「仅用户可调用」的技能，在对话输入框输入 `/expert-名称`（或点 composer 工具行的「＋专家」按钮）即可以该专家的身份执行任务。
 
 ![专家管理：从内置浏览安装到 composer ＋专家注入](docs/demo.gif)
 
 ## 核心功能
 
 - **内置专家**：ntd-resource 仓库的 `experts/` 子树经 git **稀疏检出**（只拉专家目录，不拉 400MB+ 的技能库），按来源分组浏览、搜索、详情预览、一键安装
-- **用户库管理**：专家装到 `$DSH_HOME/experts`（插件的唯一内置来源，不读取 ntd 应用的任何目录）；其他目录可经 `extraSources` 配置显式纳入
-- **团队专家**：完整支持 `expertType: team`——负责人 + 成员列表 + 各自头像；注入时使用负责人的角色定义（对齐 ntd 行为）
+- **用户库管理**：专家装到 `$DSH_HOME/experts`（插件的唯一内置来源，不读取任何专家应用自身的目录）；其他目录可经 `extraSources` 配置显式纳入
+- **团队专家**：完整支持 `expertType: team`——负责人 + 成员列表 + 各自头像；注入时使用负责人的角色定义（对齐 WorkBuddy 行为）
 - **角色注入**：每个专家在宿主技能注册表里是一个 `disable-model-invocation` 语义的技能——不进模型目录（零 token 污染），仅保留 `/expert-名称` 用户手势；发送消息时宿主确定性注入完整角色定义 + 关联技能清单（链接指向 SKILL.md，模型按需加载）
 - **输入框 ＋ 专家**：composer 工具行新增「＋ 专家」按钮，弹出带搜索框的专家候选浮层——专家/专家团分两个 tab（计数跟随搜索过滤）、各自按显示名排序，行内展示显示名与 `expert-名称` 字面量（👥 标记团队）；支持键盘 ↑/↓/Enter/Esc，选中即把 `/expert-名称` 写入草稿，发送时该专家的角色定义注入该条消息
 - **专家详情**：角色定义全文、关联技能、团队成员、快捷指令、plugin.json 原文、文件清单与体积
