@@ -30,6 +30,7 @@ function setupPlugin(config, snapshotSkills = []) {
       snapshot: async () => ({ skills: snapshotSkills }),
     },
     webServer: { register: (route) => { handler = route.handler } },
+    connection: { requestRejection: () => undefined },
     effect: (fn) => fn(),
     logger: { warn: () => {} },
     settings: { register: (ns, schema, opts) => ({ get: () => ({ ...opts.base }), update: async () => {} }) },
@@ -126,7 +127,7 @@ async function writeExpert(base, name, { team = false, agents = null, skills = [
 test('plugin exports the host-plane contract', () => {
   assert.equal(plugin.name, 'experts-management')
   // agents/agentDefaultModel/sessions：分享任务的进程内执行与「打开对话」
-  assert.deepEqual(plugin.inject, ['skills', 'webServer', 'settings', 'agents', 'agentDefaultModel', 'sessions'])
+  assert.deepEqual(plugin.inject, ['skills', 'webServer', 'settings', 'agents', 'agentDefaultModel', 'sessions', 'connection'])
 })
 
 test('builtin sources never touch ntd application directories (~/.ntd/*)', () => {
