@@ -511,7 +511,10 @@ function baseSettings(config) {
   for (const key of ['url', 'branch', 'gitBinary', 'autoSync', 'syncOnStartup']) {
     if (cfg[key] !== undefined) base[key] = cfg[key]
   }
-  if (config.builtinRepoDir !== undefined) base.repoDir = resolve(String(config.builtinRepoDir))
+  // 0.1.7 config 回写/投影可能给出 null 等非字符串值：类型不对就走默认，别让激活崩掉
+  if (config.builtinRepoDir !== undefined && config.builtinRepoDir !== null && typeof config.builtinRepoDir === 'string' && config.builtinRepoDir !== '') {
+    base.repoDir = resolve(String(config.builtinRepoDir))
+  }
   return base
 }
 
@@ -527,7 +530,6 @@ try {
   Config = Schema
     ? Schema.object({
       builtinSync: builtinSettingsSchema().volatile(),
-      builtinRepoDir: Schema.string().volatile(),
     })
     : null
 } catch { /* schemastery <3.18.4 无 .volatile()：降级为无 Config（设置写回不可用），插件运行不受影响 */ }
