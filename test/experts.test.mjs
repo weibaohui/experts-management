@@ -18,7 +18,7 @@ const {
 
 // ── HTTP handler harness（同 skills-management 测试样式）─────────────────
 
-function setupPlugin(config, snapshotSkills = []) {
+function setupPlugin(config, snapshotSkills = [], rejection) {
   let handler
   let registered
   let invalidations = 0
@@ -30,7 +30,7 @@ function setupPlugin(config, snapshotSkills = []) {
       snapshot: async () => ({ skills: snapshotSkills }),
     },
     webServer: { register: (route) => { handler = route.handler } },
-    connection: { requestRejection: () => undefined },
+    connection: { requestRejection: () => rejection },
     effect: (fn) => fn(),
     logger: { warn: () => {} },
     settings: { register: (ns, schema, opts) => ({ get: () => ({ ...opts.base }), update: async () => {} }) },
@@ -725,4 +725,10 @@ test('create/run：POST 起 job、GET 轮询、参数缺失 400、未知 id 404'
     else process.env.EXPERTS_DSH_BIN = oldBin
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('every route sits behind the connection trust fence', async () => {
+  const env = setupPlugin({}, [], 401)
+  const res = await env.call('GET', '/experts-management/api')
+  assert.equal(res.status, 401, 'unauthenticated listing is refused')
 })
