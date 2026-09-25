@@ -492,8 +492,6 @@ const DEFAULT_BUILTIN_SYNC = {
 // ntd-resource 同时携带 skills（~400MB），专家市场只稀疏检出 experts/ 子树
 const DEFAULT_BUILTIN_SPARSE_PATHS = ['experts']
 
-const BUILTIN_SETTINGS_NS = 'experts-management-builtin'
-
 function builtinSettingsSchema() {
   if (!Schema) return null
   return Schema.object({
@@ -516,6 +514,23 @@ function baseSettings(config) {
   if (config.builtinRepoDir !== undefined) base.repoDir = resolve(String(config.builtinRepoDir))
   return base
 }
+
+// ── 0.1.7 settings 接线 ──
+// settings 服务不再支持 ctx.settings.register：改为模块顶层导出 volatile Config
+// （宿主自动发现 + 自动生成设置页）。内置库同步设置挂在插件 config 的 builtinSync:
+// 子对象下（builtinRepoDir 为旧版平铺兼容位），整体标 volatile——volatile 节点的
+// 整棵子树都可被设置 UI 投影与 ctx.settings.update 写回。读走 describe() 投影，
+// 写走 ctx.settings.update('experts-management', { builtinSync: patch })，持久化进
+// profile patch（重启不丢）。
+let Config = null
+try {
+  Config = Schema
+    ? Schema.object({
+      builtinSync: builtinSettingsSchema().volatile(),
+      builtinRepoDir: Schema.string().volatile(),
+    })
+    : null
+} catch { /* schemastery <3.18.4 无 .volatile()：降级为无 Config（设置写回不可用），插件运行不受影响 */ }
 
 // ── 编辑端点（v0.3）：只写 dsh 用户库；内置只读 ─────────────────────────
 const EDIT_BODY_MAX_BYTES = 8 * 1024 * 1024
@@ -563,6 +578,7 @@ const AGENT_FILE_RE = /^agents\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$/
 module.exports = {
   name: 'experts-management',
   inject: ['skills', 'webServer', 'settings', 'agents', 'agentDefaultModel', 'sessions', 'connection'],
+  Config,
   __internals: {
     extractFrontmatter, parseFrontmatter, parseAgentMd, parseSkillMd, parsePluginJson,
     localized, truncateDescription, resolveWithin, isSafeExpertName,
@@ -633,8 +649,7 @@ module.exports = {
     }
     const builtinStateFile = join(dshHome(), 'experts-management', 'builtin-sync.json')
     let builtinState = { lastSyncAt: undefined, lastResult: undefined }
-    let settingsScope = null
-    const settingsOverrides = {}  // fallback sheet when the settings service is absent
+    const settingsOverrides = {}  // 进程内兜底：写回缺席/失败时保本次运行一致
     const builtinStateLoaded = migrateV1Layout()
       .then(() => fsP.readFile(builtinStateFile, 'utf8'))
       .then((raw) => {
@@ -643,11 +658,37 @@ module.exports = {
         if (parsed) builtinState = { lastSyncAt: parsed.lastSyncAt, lastResult: parsed.lastResult }
       })
       .catch(() => {})
-    if (Schema && ctx.settings && typeof ctx.settings.register === 'function') {
+    function readBuiltinDescriptor() {
       try {
-        settingsScope = ctx.settings.register(BUILTIN_SETTINGS_NS, builtinSettingsSchema(), { base: baseSettings(config) })
-      } catch (e) { ctx.logger.warn(`experts-management: settings register: ${e && e.message}`) }
+        if (!ctx.settings || typeof ctx.settings.describe !== 'function') return null
+        return ctx.settings.describe().find((x) => x.ns === 'experts-management') || null
+      } catch { return null }
     }
+    let liveSettings = {} // settings 文档实时值（document-updated 事件驱动刷新）
+    // apply 时 loader 可能尚未就绪（describe 投影里还没有本插件条目），间隔重试
+    function refreshLive(attempt = 0) {
+      const d = readBuiltinDescriptor()
+      if (d) {
+        if (d.value && typeof d.value === 'object') liveSettings = d.value
+        return
+      }
+      if (attempt < 15) setTimeout(() => { refreshLive(attempt + 1) }, 2000).unref?.()
+    }
+    refreshLive()
+
+    // settings 文档变更（dsh 自动生成的设置页、本插件面板写回）刷新实时值
+    try {
+      if (ctx.on && typeof ctx.on === 'function') {
+        ctx.effect(() => {
+          const off = ctx.on('settings/document-updated', (ns) => {
+            if (ns !== 'experts-management') return
+            const d = readBuiltinDescriptor()
+            if (d && d.value && typeof d.value === 'object') liveSettings = d.value
+          })
+          return () => { try { off() } catch {} }
+        }, 'experts-management: settings watch')
+      }
+    } catch { /* 事件订阅不可用：写回后靠 settingsOverrides 维持本次运行 */ }
     const saveBuiltinState = async () => {
       try {
         await fsP.mkdir(join(builtinStateFile, '..'), { recursive: true })
@@ -656,11 +697,13 @@ module.exports = {
       } catch {}
     }
     const builtinSettings = () => {
-      if (settingsScope && typeof settingsScope.get === 'function') {
-        const v = settingsScope.get()
-        if (v && typeof v === 'object') return { ...baseSettings(config), ...v }
+      const doc = (liveSettings && typeof liveSettings === 'object') ? liveSettings : {}
+      const docSync = (doc.builtinSync && typeof doc.builtinSync === 'object') ? doc.builtinSync : {}
+      const out = { ...baseSettings(config), ...docSync, ...settingsOverrides }
+      if (doc.builtinRepoDir !== undefined && doc.builtinRepoDir !== null && doc.builtinRepoDir !== '') {
+        out.repoDir = resolve(String(doc.builtinRepoDir))
       }
-      return { ...baseSettings(config), ...settingsOverrides }
+      return out
     }
 
     let builtinSyncRun = null
@@ -1270,16 +1313,21 @@ module.exports = {
             for (const key of ['url', 'branch', 'gitBinary']) {
               if (typeof body[key] === 'string' && body[key] !== '') patch[key] = body[key]
             }
+            let clearToken = false
             if (typeof body.token === 'string' && body.token !== '') patch.token = body.token
-            if (body.token === null || body.token === '') patch.token = undefined
+            if (body.token === null || body.token === '') clearToken = true
             if (typeof body.repoDir === 'string' && body.repoDir !== '') patch.repoDir = resolve(body.repoDir)
             for (const key of ['autoSync', 'syncOnStartup']) {
               if (typeof body[key] === 'boolean') patch[key] = body[key]
             }
-            if (settingsScope && typeof settingsScope.update === 'function') {
-              await settingsScope.update(patch)
-            } else {
-              Object.assign(settingsOverrides, patch)
+            if (clearToken) delete settingsOverrides.token
+            else Object.assign(settingsOverrides, patch)
+            // 0.1.7 持久化：平铺 patch 挂进 builtinSync: 子对象；token 清空走 mutate.unset
+            if (ctx.settings && typeof ctx.settings.update === 'function') {
+              try {
+                if (Object.keys(patch).length > 0) await ctx.settings.update('experts-management', { builtinSync: patch })
+                if (clearToken) await ctx.settings.mutate('experts-management', [{ op: 'unset', path: ['builtinSync', 'token'] }])
+              } catch (e) { ctx.logger.warn(`experts-management: settings update 失败（仅本次运行生效）: ${e && e.message}`) }
             }
             const eff = builtinSettings()
             const { token, ...safe } = eff  // token 只写不回读
