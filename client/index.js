@@ -1367,11 +1367,11 @@ module.exports = {
       if (ctx.locale && typeof ctx.locale.register === 'function') {
         ctx.locale.register(NS, 'zh', ZH)
         ctx.locale.register(NS, 'en', EN)
-        // 菜单组标题按源名走 slash.menu 命名空间；注册失败仅回退显示源名 'expert'
-        try {
-          ctx.locale.register('slash.menu', 'zh', { [EXPERT_SOURCE_NAME]: '专家' })
-          ctx.locale.register('slash.menu', 'en', { [EXPERT_SOURCE_NAME]: 'Expert' })
-        } catch {}
+        // slash.menu 命名空间归宿主 input-trigger 所有：此处不再抢注（抢注会让
+        // input-trigger 后续注册时撞 "already has locale zh" 而加载失败）。菜单组
+        // 标题改在下方 ctx.inject(['inputTriggers','sessions']) 动态块里补——届时
+        // input-trigger 已注册 slash.menu，本源标题键的重复注册被运行时拒绝并吞掉，
+        // 不影响显示回退（源名 'expert'）。
         const bound = typeof ctx.locale.bind === 'function' ? ctx.locale.bind(NS) : null
         if (bound) {
           t = (key, vars) => {
@@ -1391,6 +1391,14 @@ module.exports = {
           composerScope = scope
           if (scope && scope.inputTriggers && typeof scope.inputTriggers.registerSource === 'function') {
             ctx.effect(() => scope.inputTriggers.registerSource(makeExpertSource(t)), 'experts-management: expert trigger source')
+          }
+          // 菜单组标题：inputTriggers 就绪（即宿主 input-trigger 已注册 slash.menu）
+          // 后再补本源标题键；重复注册被运行时拒绝并吞掉，不影响显示回退。
+          if (ctx.locale && typeof ctx.locale.register === 'function') {
+            try {
+              ctx.locale.register('slash.menu', 'zh', { [EXPERT_SOURCE_NAME]: '专家' })
+              ctx.locale.register('slash.menu', 'en', { [EXPERT_SOURCE_NAME]: 'Expert' })
+            } catch {}
           }
         })
       }
