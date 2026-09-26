@@ -5,7 +5,7 @@
 
 **专家管理插件**：管理 WorkBuddy 兼容格式的专家与专家团队（单个专家 / 多人团队），浏览安装 50+ 内置专家；每个专家注册为「仅用户可调用」的技能，在对话输入框输入 `/expert-名称`（或点 composer 工具行的「＋专家」按钮）即可以该专家的身份执行任务。
 
-![专家管理：从内置浏览安装到 composer ＋专家注入](docs/demo.gif)
+![专家管理：从内置浏览安装到 composer ＋专家注入](https://raw.githubusercontent.com/weibaohui/experts-management/main/docs/demo.gif)
 
 ## 核心功能
 
