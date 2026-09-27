@@ -525,13 +525,16 @@ function baseSettings(config) {
 // 整棵子树都可被设置 UI 投影与 ctx.settings.update 写回。读走 describe() 投影，
 // 写走 ctx.settings.update('experts-management', { builtinSync: patch })，持久化进
 // profile patch（重启不丢）。
-let Config = null
+let Config
 try {
   Config = Schema
     ? Schema.object({
       builtinSync: builtinSettingsSchema().volatile(),
     })
-    : null
+    : undefined
+  // 降级值必须是 undefined 而非 null（上面 ternary 的 null 也一并归一）：宿主
+  // settings 的 schema() 只排除 undefined，"toJSON" in null 会抛 TypeError 逃出
+  // describe()，拖垮整份设置文档（同 dsh-continue#4）
 } catch { /* schemastery <3.18.4 无 .volatile()：降级为无 Config（设置写回不可用），插件运行不受影响 */ }
 
 // ── 编辑端点（v0.3）：只写 dsh 用户库；内置只读 ─────────────────────────
@@ -580,7 +583,7 @@ const AGENT_FILE_RE = /^agents\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$/
 module.exports = {
   name: 'experts-management',
   inject: ['skills', 'webServer', 'settings', 'agents', 'agentDefaultModel', 'sessions', 'connection'],
-  Config,
+  Config: Config ?? undefined,
   __internals: {
     extractFrontmatter, parseFrontmatter, parseAgentMd, parseSkillMd, parsePluginJson,
     localized, truncateDescription, resolveWithin, isSafeExpertName,
