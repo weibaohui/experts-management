@@ -11,8 +11,10 @@
  * - a `＋ 专家` button in the composer tool row (`conversation.input.left`)
  *   that opens the plugin's own searchable picker popover (the host slash menu
  *   filters only by a typed query, which a button click cannot provide); the
- *   pick is written into the draft through the same scoped
- *   `slash/input-insert-text` event the host menu uses.
+ *   pick is written into the draft via the session slot's standard
+ *   `inputActions` face (`captureInsertion()` + `insertText()`, dsh 0.2.x+),
+ *   falling back to the scoped `slash/input-insert-text` event on hosts that
+ *   still hand the slot an `input` snapshot (≤0.1.x).
  *
  * All interactive controls are host primitives
  * (@deepseek-ai/dsh-client-ui-primitives); all colors come from the ui-theme
@@ -355,8 +357,8 @@ const STYLE = `<style>
 .exp-chip{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 9px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
 .exp-chip:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .exp-picker-backdrop{position:fixed;inset:0;z-index:2147483200}
-.exp-picker{position:fixed;z-index:2147483201;width:400px;max-width:92vw;max-height:360px;display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--dsw-specific-menu);border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;box-shadow:var(--dsw-shadow-lv3)}
-.exp-picker-input{flex:none}
+.exp-picker{position:fixed;z-index:2147483201;width:400px;max-width:92vw;max-height:360px;display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter,blur(20px) saturate(150%));-webkit-backdrop-filter:var(--dsw-menu-backdrop-filter,blur(20px) saturate(150%));border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;box-shadow:var(--dsw-shadow-lv3)}
+.exp-picker-input{flex:none;box-sizing:border-box;width:100%}
 .exp-picker-tabs{flex:none;align-self:flex-start}
 .exp-picker-list{display:flex;flex-direction:column;min-height:40px;overflow-y:auto}
 .exp-picker-row{display:flex;align-items:center;gap:8px;width:100%;min-height:36px;padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;font:inherit;font-size:13px}
@@ -461,8 +463,9 @@ async function fetchRoster(force) {
   try {
     const data = await fetchJson(API)
     const mine = Array.isArray(data.mine) ? data.mine : []
-    const builtin = (Array.isArray(data.builtin) ? data.builtin : []).filter((e) => !e.installed)
-    expertRoster = toRosterRows(mine, builtin)
+    // 浮层与斜杠候选只收用户库已安装条目；内置/市场目录的浏览与安装收敛在
+    // 管理页（「内置」tab）。未安装条目出现在选择界面会让人误以为可直接调用。
+    expertRoster = toRosterRows(mine, [])
     expertRosterAt = Date.now()
     for (const listener of [...rosterListeners]) { try { listener() } catch {} }
   } catch { /* 菜单失败静默：候选组保持 pending/缺席 */ }
@@ -535,6 +538,11 @@ function openTriggerSource(composerScope, sessionId, input, sourceName) {
  * picker popover is open the composer draft cannot move (focus is in the
  * picker), so the splice applies; a stale snapshot quietly no-ops, same as
  * the host menu's span-CAS.
+ *
+ * dsh 0.2.x fallback only: the slot's standard props dropped `input`, so on
+ * new hosts `input` is undefined and this would splice with `draftRev: 0` —
+ * rejected by the editor's span-CAS whenever the draft rev is past 0. The
+ * primary path is `insertViaInputActions` (see above).
  */
 function insertComposerText(scope, sessionId, input, text) {
   const sessions = scope && scope.sessions
@@ -549,6 +557,27 @@ function insertComposerText(scope, sessionId, input, text) {
       text,
       span: { start: at, end: at, draftRev: (input && input.draftRev) || 0 },
     }) === true
+  } catch { return false }
+}
+
+/**
+ * dsh 0.2.x insertion channel: the `conversation.input.left` slot no longer
+ * receives an `input` prop, so any span built from a prop snapshot carries
+ * `draftRev: 0` and the editor's span-CAS (`span.draftRev !== this.rev`)
+ * rejects it silently — pick closes the popover and nothing lands in the
+ * draft. The slot instead receives the standard `inputActions` face; the
+ * span must be captured at pick time (`captureInsertion()` returns a
+ * revision-guarded copy of the live editor selection), not read from a
+ * React prop, which always trails the editor revision.
+ */
+function insertViaInputActions(inputActions, text) {
+  if (!inputActions
+    || typeof inputActions.captureInsertion !== 'function'
+    || typeof inputActions.insertText !== 'function') return false
+  try {
+    const span = inputActions.captureInsertion()
+    if (!span || typeof span.draftRev !== 'number') return false
+    return inputActions.insertText(text, span) === true
   } catch { return false }
 }
 
@@ -1342,7 +1371,7 @@ module.exports = {
   __internals: {
     NS, ZH, EN, matchExpert, formatSize, formatTime, avatarUrl,
     EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource, fetchRoster,
-    toRosterRows, insertComposerText, splitRosterByType, pickerRowMatch,
+    toRosterRows, insertComposerText, insertViaInputActions, splitRosterByType, pickerRowMatch,
     parseCreateResult, CREATE_TEMPLATES, EXPERT_CREATE_PROMPT_AGENT, EXPERT_CREATE_PROMPT_TEAM,
   },
   /** Test/host helper: mount a standalone page into any container. */
@@ -1431,6 +1460,7 @@ module.exports = {
             __t: t, label: t('pickExpert'), title: t('pickExpertTitle'),
             composerScopeRef: () => composerScope,
             sessionId: apiProps && apiProps.sessionId, input: apiProps && apiProps.input,
+            inputActions: apiProps && apiProps.inputActions,
           })
         }))
       } catch (e) { (globalThis.__expErrors = globalThis.__expErrors || []).push('input.left:' + (e && e.message)); throw e }
@@ -1463,7 +1493,15 @@ function ComposerButtonSlot(props) {
       .catch(() => setRows([]))
   }
   const pick = (row) => {
-    insertComposerText(composerScope, props.sessionId, liveInput.current, `/${row.name} `)
+    const text = `/${row.name} `
+    // dsh 0.2.x: capture the span at pick time via the slot's inputActions;
+    // ≤0.1.x hosts (no inputActions, live `input` prop) fall back to the
+    // scoped-event splice with the prop snapshot.
+    const ok = insertViaInputActions(props.inputActions, text)
+      || insertComposerText(composerScope, props.sessionId, liveInput.current, text)
+    if (!ok) {
+      try { console.warn('[experts-management] draft insert failed for', row.name) } catch {}
+    }
     close()
     refocusComposer()
   }

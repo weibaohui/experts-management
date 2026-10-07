@@ -241,7 +241,7 @@ test('candidateName prefixes expert- and must stay kebab', () => {
 
 // ── Provider + API over fixtures ─────────────────────────────────────────
 
-test('provider lists experts with expert- prefix, model-invisible + user-invocable, installed shadows builtin', async () => {
+test('provider lists only user-installed experts (builtin never enters the registry), expert- prefix, model-invisible + user-invocable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-experts-'))
   try {
     const builtin = join(root, 'builtin', 'experts')
@@ -254,15 +254,13 @@ test('provider lists experts with expert- prefix, model-invisible + user-invocab
 
     const env = setupPlugin({ builtinRepoDir: join(root, 'builtin'), installedDir: installed })
     const candidates = await env.registered.list()
-    assert.equal(candidates.length, 2)
-    const byName = Object.fromEntries(candidates.map((c) => [c.name, c]))
-    const backend = byName['expert-backend-architect']
+    // 只有用户库条目进注册表；内置（含未被覆盖的 software-company）一律不注册
+    assert.equal(candidates.length, 1)
+    const backend = candidates[0]
+    assert.equal(backend.name, 'expert-backend-architect')
     assert.equal(backend.source, 'user-installed')
     assert.equal(backend.rank, 100)
     assert.deepEqual(backend.invocation, { modelInvocable: false, userInvocable: true })
-    const team = byName['expert-software-company']
-    assert.equal(team.source, 'builtin')
-    assert.equal(team.rank, 500)
 
     // get(): 已装副本生效（内容来自用户库）——市场副本带技能、用户库副本不带，
     // 结果里没有「可用技能」段，恰好证明读取的是用户库而非市场
@@ -273,11 +271,6 @@ test('provider lists experts with expert- prefix, model-invisible + user-invocab
     assert.equal(loaded.invocation.modelInvocable, false)
     assert.equal(loaded.resourceBase.kind, 'directory')
     assert.ok(loaded.path.endsWith('.md'))
-
-    // team 的 get(): 注入 lead 的角色定义
-    const lead = await env.registered.get(team)
-    assert.match(lead.content, /你是 lead-a 专家的完整角色定义/)
-    assert.doesNotMatch(lead.content, /member-b 专家/)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

@@ -49,7 +49,6 @@ function dshHome() {
 
 const BUILTIN_SCAN_SKIP = new Set(['.git', 'node_modules'])
 const RANK_INSTALLED = 100
-const RANK_BUILTIN = 500
 const MAX_BODY_BYTES = 64 * 1024
 const DESCRIPTION_LIMIT = 140
 // 同款正则见 skill/skill/src/index.ts SKILL_NAME —— 不合规的候选会让 registry 抛错
@@ -787,7 +786,7 @@ module.exports = {
       return {
         name: providerName,
         async list() {
-          const { mine, builtin } = await discoverAll()
+          const { mine } = await discoverAll()
           const candidates = []
           const seen = new Set()
           // 专家一律 modelInvocable:false：不进模型目录（零 token 污染），
@@ -819,12 +818,10 @@ module.exports = {
               metadata: { expertType: e.expertType, profession: e.professionZh ?? e.professionEn, version: e.version },
             })
           }
+          // 只注册用户库已安装专家：内置/市场目录的浏览与安装在管理页。
+          // 未安装条目进注册表会让宿主 / 菜单与其它插件的技能浮层出现
+          // 「看着能选、其实未装机」的条目，与「选择界面只列已安装」口径不符。
           for (const e of mine) push(e, 'user-installed', RANK_INSTALLED)
-          const mineNames = new Set(mine.map((e) => e.name))
-          for (const e of builtin) {
-            if (mineNames.has(e.name)) continue // 用户库覆盖内置同名专家
-            push(e, 'builtin', RANK_BUILTIN)
-          }
           return candidates
         },
         async get(candidate) {

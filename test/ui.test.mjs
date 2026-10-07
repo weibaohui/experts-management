@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 // Plain-Node 契约测试：client/index.js 自带 React/primitives shim，可直接 require
 const client = require('../client/index.js')
-const { NS, ZH, EN, matchExpert, avatarUrl, EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource, toRosterRows, insertComposerText, splitRosterByType, pickerRowMatch } = client.__internals
+const { NS, ZH, EN, matchExpert, avatarUrl, EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource, toRosterRows, insertComposerText, insertViaInputActions, splitRosterByType, pickerRowMatch } = client.__internals
 
 test('client exports the browser-plane contract', () => {
   assert.equal(client.name, '@weibaohui/experts-management')
@@ -81,6 +81,29 @@ test('expert trigger source: candidates filtered by query, section replaces grou
     assert.deepEqual(source.lexicon({}), ['expert-backend-architect'])
   } finally {
     globalThis.fetch = realFetch
+  }
+})
+
+test('fetchRoster 只收用户库已安装条目,内置/市场目录不进浮层与斜杠候选', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      mine: [{ name: 'backend-architect', description: '后端', expertType: 'agent' }],
+      builtin: [
+        { name: 'trend-researcher', description: '趋势', expertType: 'agent' },
+        { name: 'backend-architect', description: '后端(内置同名)', expertType: 'agent', installed: true },
+      ],
+    }),
+  })
+  try {
+    await client.__internals.fetchRoster(true)
+    const source = makeExpertSource()
+    const rows = await source.candidates({}, { query: 'expert-', signal: new AbortController().signal })
+    assert.deepEqual(rows.map((r) => r.name), ['expert-backend-architect'])
+  } finally {
+    globalThis.fetch = realFetch
+    await client.__internals.fetchRoster(true) // 还原缓存,避免影响后续测试
   }
 })
 
@@ -191,6 +214,31 @@ test('insertComposerText bails slash/input-insert-text with an end-of-draft span
   assert.equal(insertComposerText(null, 's', {}, '/x '), false)
   assert.equal(insertComposerText({ sessions: { scope: () => { throw new Error('x') } } }, 's', {}, '/x '), false)
   assert.equal(insertComposerText({ sessions: { scope: () => null } }, 's', {}, '/x '), false)
+})
+
+test('insertViaInputActions captures the span at pick time (dsh 0.2.x contract)', () => {
+  // captureInsertion 在调用当下现取 span;insertText 收到的就是它,不再经过 prop 快照
+  const captured = { start: 3, end: 3, draftRev: 9 }
+  const calls = []
+  const actions = {
+    captureInsertion: () => captured,
+    insertText: (text, span) => { calls.push([text, span]); return true },
+  }
+  assert.equal(insertViaInputActions(actions, '/expert-a '), true)
+  assert.deepEqual(calls[0], ['/expert-a ', { start: 3, end: 3, draftRev: 9 }])
+  // insertText 报告 CAS 失败(草稿已变/编辑器锁定)→ false
+  assert.equal(insertViaInputActions({ captureInsertion: () => captured, insertText: () => false }, '/x '), false)
+  // captureInsertion 返回的 span 缺 draftRev → 视为无效,不调用 insertText
+  let called = 0
+  assert.equal(insertViaInputActions({ captureInsertion: () => null, insertText: () => { called++; return true } }, '/x '), false)
+  assert.equal(insertViaInputActions({ captureInsertion: () => ({ start: 0, end: 0 }), insertText: () => { called++; return true } }, '/x '), false)
+  assert.equal(called, 0)
+  // captureInsertion 抛错 → false,不外泄异常
+  assert.equal(insertViaInputActions({ captureInsertion: () => { throw new Error('busy') }, insertText: () => true }, '/x '), false)
+  // 服务缺席 / 形状不对 → false
+  assert.equal(insertViaInputActions(null, '/x '), false)
+  assert.equal(insertViaInputActions({}, '/x '), false)
+  assert.equal(insertViaInputActions({ captureInsertion: () => captured }, '/x '), false)
 })
 
 test('parseCreateResult：agent 取 json+markdown 围栏；team 取带路径标注围栏（按序去重）；缺失回退 raw', () => {
