@@ -45,7 +45,14 @@ let RDP = null
 try { RDP = require('react-dom') } catch {}
 
 const CLIENT_NAME = '@weibaohui/experts-management'
-const API = '/experts-management/api'
+// API 基址随页面走：子路径反代（如 https://host/app/dsh/）下，绝对路径 /experts-management/api
+// 会打到站点根而 404。与宿主官方客户端一致，用 document.baseURI 推导（dsh-sync#14 同款）。
+const API = (() => {
+  try {
+    const base = (typeof document !== 'undefined' && document.baseURI) || (typeof location !== 'undefined' ? location.href : '/')
+    return new URL('experts-management/api', new URL('.', base)).pathname.replace(/\/+$/, '')
+  } catch { return '/experts-management/api' }
+})()
 
 /** Idempotent stylesheet injection. */
 function ensureStyles() {
