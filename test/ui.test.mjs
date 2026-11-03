@@ -154,7 +154,7 @@ test('avatarUrl builds the encoded API url, member optional', () => {
 test('toRosterRows surfaces the displayName, flags teams, sorts by displayName', () => {
   const rows = toRosterRows(
     [{ name: 'plain', description: 'no display name' },
-     { name: 'backend-architect', displayName: '磐石', description: '分布式系统', expertType: 'agent' }],
+     { name: 'backend-architect', displayName: '磐石', description: '分布式系统', expertType: 'agent', hasAvatar: true, source: 'dsh' }],
     [{ name: 'review-team', displayName: '评审专家组', expertType: 'team', profession: '代码评审' }],
   )
   assert.equal(rows.length, 3)
@@ -167,6 +167,12 @@ test('toRosterRows surfaces the displayName, flags teams, sorts by displayName',
   assert.equal(rows[0].plainDescription, '分布式系统')
   assert.equal(rows[0].icon, '🧑‍💼')
   assert.equal(rows[0].team, false)
+  // issue #9：头像判定字段透传给 picker（hasAvatar → 真实头像图）
+  assert.equal(rows[0].hasAvatar, true)
+  assert.equal(rows[0].source, 'dsh')
+  assert.equal(rows[0].rawName, 'backend-architect')
+  assert.equal(rows[1].hasAvatar, false)
+  assert.equal(rows[1].rawName, 'review-team')
   // 专家团：图标 + team 标记 + 显示名
   assert.equal(rows[1].icon, '👥')
   assert.equal(rows[1].team, true)
@@ -176,6 +182,23 @@ test('toRosterRows surfaces the displayName, flags teams, sorts by displayName',
   assert.equal(rows[2].description, 'no display name')
   // 非数组输入按空处理，不抛错
   assert.deepEqual(toRosterRows(undefined, null), [])
+})
+
+test('PickerAvatar prefers the real avatar and falls back to the type emoji (issue #9)', () => {
+  const { PickerAvatar } = client.__internals
+  // hasAvatar → <img> 指向 avatar API（rawName 不带 expert- 前缀）
+  const img = PickerAvatar({ row: { hasAvatar: true, rawName: 'backend-architect', source: 'dsh', icon: '🧑‍💼' } })
+  assert.equal(img.type, 'img')
+  assert.ok(img.props.className.includes('exp-picker-avatar'))
+  assert.equal(img.props.src, avatarUrl('backend-architect', 'dsh'))
+  // 无头像 → emoji span（专用字体栈类，ZWJ 序列不裂字）
+  const emoji = PickerAvatar({ row: { hasAvatar: false, icon: '🧑‍💼' } })
+  assert.equal(emoji.type, 'span')
+  assert.ok(emoji.props.className.includes('exp-picker-icon'))
+  assert.deepEqual(emoji.kids, ['🧑‍💼'])
+  // team 同理走 emoji 回退
+  const team = PickerAvatar({ row: { hasAvatar: false, icon: '👥' } })
+  assert.deepEqual(team.kids, ['👥'])
 })
 
 test('splitRosterByType separates single experts from teams, sorted order preserved', () => {

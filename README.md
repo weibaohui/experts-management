@@ -66,7 +66,8 @@ npm run build:client # 生成 client/bundle.js
 
 | 插件版本 | 适配 dsh 版本 | 备注 |
 |---------|--------------|------|
-| 0.5.9 | 0.1.7-rc.2 | 当前版本；修复降级路径 Config 导出 null——宿主 settings schema() 不排除 null，会炸 settings.describe() 拖垮整份设置文档（同 dsh-continue#4） |
+| 0.5.12 | 0.2.1-rc.2 | 修复 issue #9：＋专家选择浮层两行布局——描述独占次行（2 行截断保护）展示完全，不再与名字/字面量同排挤压遮挡；行头像优先展示真实头像（管理页「更换头像」上传的那张，内置专家随仓库分发），未设置时回退类型 emoji 并改用专用 emoji 字体栈——`🧑‍💼` ZWJ 序列在 Windows 上不再裂成 🧑+💼 两个字形挤占名字；离线测试 44 项 |
+| 0.5.9 | 0.1.7-rc.2 | 修复降级路径 Config 导出 null——宿主 settings schema() 不排除 null，会炸 settings.describe() 拖垮整份设置文档（同 dsh-continue#4） |
 | 0.5.6 | 0.1.7-rc.2 | 修复宿主将 volatile 字段物化为 {} 导致的设置毒化（saneConfigValues 清洗 + 移除 Config 兼容字符串字段） |
 | 0.5.5 | 0.1.7-rc.2 | 适配 0.1.7 settings 模型（导出 volatile `Config`，`ctx.settings.update` 持久化），面板改动重启不再丢失 |
 | 0.5.3 | 0.1.7-rc.2 | 当前版本，已在 @deepseek-ai/dsh@0.1.7-rc.2 下验证运行 |

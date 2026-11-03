@@ -531,12 +531,14 @@ window.__ModuleLoader__.load({
     .exp-picker-input{flex:none;box-sizing:border-box;width:100%}
     .exp-picker-tabs{flex:none;align-self:flex-start}
     .exp-picker-list{display:flex;flex-direction:column;min-height:40px;overflow-y:auto}
-    .exp-picker-row{display:flex;align-items:center;gap:8px;width:100%;min-height:36px;padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;font:inherit;font-size:13px}
+    .exp-picker-row{display:flex;flex-direction:column;align-items:stretch;gap:2px;width:100%;padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;font:inherit;font-size:13px}
     .exp-picker-row[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover)}
-    .exp-picker-icon{width:18px;flex:none;text-align:center}
-    .exp-picker-name{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
-    .exp-picker-literal{flex:none;max-width:32%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px}
-    .exp-picker-desc{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px}
+    .exp-picker-main{display:flex;align-items:center;gap:8px;min-width:0}
+    .exp-picker-icon{width:18px;height:18px;flex:none;text-align:center;font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif;line-height:18px;font-size:14px}
+    .exp-picker-avatar{border-radius:50%;object-fit:cover}
+    .exp-picker-name{flex:0 1 auto;min-width:0;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+    .exp-picker-literal{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px}
+    .exp-picker-desc{width:100%;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
     .exp-picker-empty{padding:12px 10px;text-align:center;color:var(--dsw-alias-label-dimmed);font-size:13px}
     .exp-overlay{position:fixed;inset:0;z-index:2147483000;background:var(--dsw-alias-bg-base);overflow:auto;padding:20px 26px}
     .exp-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
@@ -605,11 +607,15 @@ window.__ModuleLoader__.load({
         const desc = e.description || e.profession || ''
         return {
           name: `expert-${e.name}`,
+          rawName: e.name,
           displayName,
           description: displayName && displayName !== e.name ? (desc === '' ? displayName : `${displayName} · ${desc}`) : desc,
           plainDescription: desc,
           team: e.expertType === 'team',
           icon: e.expertType === 'team' ? '👥' : '🧑‍💼',
+          // issue #9：picker 优先展示真实头像（管理页「更换头像」可调整），透传判定字段
+          hasAvatar: e.hasAvatar === true,
+          source: e.source,
         }
       })
       rows.sort((a, b) => String(a.displayName).localeCompare(String(b.displayName), 'zh'))
@@ -764,6 +770,24 @@ window.__ModuleLoader__.load({
     const PICKER_ROW_CAP = 200
 
     /**
+     * ＋专家 picker 行头像（issue #9）：优先真实头像——管理页专家卡片「更换头像」
+     * 上传的那张（内置专家随仓库分发，同样可展示），加载失败或未设置时回退到
+     * 类型 emoji。emoji 走 .exp-picker-icon 的专用字体栈渲染，🧑‍💼 这类 ZWJ 序列
+     * 在 Windows 上不再裂成 🧑+💼 两个字形挤占名字。
+     */
+    function PickerAvatar({ row }) {
+      const [failed, setFailed] = useState(false)
+      if (!failed && row.hasAvatar) {
+        return h('img', {
+          className: 'exp-picker-icon exp-picker-avatar',
+          src: avatarUrl(row.rawName, row.source),
+          alt: '', onError: () => setFailed(true),
+        })
+      }
+      return h('span', { className: 'exp-picker-icon', 'aria-hidden': 'true' }, row.icon)
+    }
+
+    /**
      * ＋ 专家 picker：锚定在按钮上方、自带搜索框的候选浮层（portal 到 body）。
      * 宿主斜杠菜单靠「输入的 query」过滤，按钮打开的菜单没有输入载体——候选
      * 太多时无从筛选，所以浮层自带搜索框。专家/专家团分两个 tab（tab 标签上的
@@ -830,10 +854,13 @@ window.__ModuleLoader__.load({
                     onMouseEnter: () => setActive(i),
                     onMouseDown: (e) => { e.preventDefault(); props.onPick(row) },
                   },
-                    row.icon ? h('span', { className: 'exp-picker-icon', 'aria-hidden': 'true' }, row.icon) : null,
-                    h('span', { className: 'exp-picker-name' }, row.displayName || row.name),
-                    row.displayName && row.displayName !== row.name ? h('span', { className: 'exp-picker-literal' }, row.name) : null,
-                    h('span', { className: 'exp-picker-desc' }, row.plainDescription || ''))))))
+                    // 两行布局（issue #9）：首行头像/名字/字面量，次行描述独占整行——
+                    // 单行四列时描述被挤压到只剩几个字还互相遮挡。
+                    h('div', { className: 'exp-picker-main' },
+                      PickerAvatar({ row }),
+                      h('span', { className: 'exp-picker-name' }, row.displayName || row.name),
+                      row.displayName && row.displayName !== row.name ? h('span', { className: 'exp-picker-literal' }, row.name) : null),
+                    row.plainDescription ? h('div', { className: 'exp-picker-desc' }, row.plainDescription) : null)))))
     }
 
     // ── Small components ─────────────────────────────────────────────────────
@@ -1542,6 +1569,7 @@ window.__ModuleLoader__.load({
         NS, ZH, EN, matchExpert, formatSize, formatTime, avatarUrl,
         EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource, fetchRoster,
         toRosterRows, insertComposerText, insertViaInputActions, splitRosterByType, pickerRowMatch,
+        PickerAvatar,
         parseCreateResult, CREATE_TEMPLATES, EXPERT_CREATE_PROMPT_AGENT, EXPERT_CREATE_PROMPT_TEAM,
       },
       /** Test/host helper: mount a standalone page into any container. */
