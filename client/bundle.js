@@ -856,8 +856,11 @@ window.__ModuleLoader__.load({
                   },
                     // 两行布局（issue #9）：首行头像/名字/字面量，次行描述独占整行——
                     // 单行四列时描述被挤压到只剩几个字还互相遮挡。
+                    // PickerAvatar 含 useState，必须按组件渲染：当普通函数调用时 hook 记到
+                    // ExpertPicker 头上且条数随行数变，候选行一出现 React 就抛 Rendered more
+                    // hooks，宿主 error boundary 卸掉整个 chip（issue #10）。
                     h('div', { className: 'exp-picker-main' },
-                      PickerAvatar({ row }),
+                      h(PickerAvatar, { row }),
                       h('span', { className: 'exp-picker-name' }, row.displayName || row.name),
                       row.displayName && row.displayName !== row.name ? h('span', { className: 'exp-picker-literal' }, row.name) : null),
                     row.plainDescription ? h('div', { className: 'exp-picker-desc' }, row.plainDescription) : null)))))
@@ -1569,7 +1572,7 @@ window.__ModuleLoader__.load({
         NS, ZH, EN, matchExpert, formatSize, formatTime, avatarUrl,
         EXPERT_SOURCE_NAME, makeExpertSource, openTriggerSource, fetchRoster,
         toRosterRows, insertComposerText, insertViaInputActions, splitRosterByType, pickerRowMatch,
-        PickerAvatar,
+        PickerAvatar, ExpertPicker,
         parseCreateResult, CREATE_TEMPLATES, EXPERT_CREATE_PROMPT_AGENT, EXPERT_CREATE_PROMPT_TEAM,
       },
       /** Test/host helper: mount a standalone page into any container. */

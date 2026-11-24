@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
 // Plain-Node 契约测试：client/index.js 自带 React/primitives shim，可直接 require
@@ -184,21 +186,105 @@ test('toRosterRows surfaces the displayName, flags teams, sorts by displayName',
   assert.deepEqual(toRosterRows(undefined, null), [])
 })
 
+// shim 的 createElement 不展开函数组件：按 React 语义手动展开一层
+const render = (el) => (typeof el.type === 'function' ? render(el.type(el.props)) : el)
+
 test('PickerAvatar prefers the real avatar and falls back to the type emoji (issue #9)', () => {
   const { PickerAvatar } = client.__internals
+  // 经组件元素渲染（issue #10）：含 hook 的组件不能当普通函数直接调用
+  const avatar = (row) => render({ type: PickerAvatar, props: { row } })
   // hasAvatar → <img> 指向 avatar API（rawName 不带 expert- 前缀）
-  const img = PickerAvatar({ row: { hasAvatar: true, rawName: 'backend-architect', source: 'dsh', icon: '🧑‍💼' } })
+  const img = avatar({ hasAvatar: true, rawName: 'backend-architect', source: 'dsh', icon: '🧑‍💼' })
   assert.equal(img.type, 'img')
   assert.ok(img.props.className.includes('exp-picker-avatar'))
   assert.equal(img.props.src, avatarUrl('backend-architect', 'dsh'))
   // 无头像 → emoji span（专用字体栈类，ZWJ 序列不裂字）
-  const emoji = PickerAvatar({ row: { hasAvatar: false, icon: '🧑‍💼' } })
+  const emoji = avatar({ hasAvatar: false, icon: '🧑‍💼' })
   assert.equal(emoji.type, 'span')
   assert.ok(emoji.props.className.includes('exp-picker-icon'))
   assert.deepEqual(emoji.kids, ['🧑‍💼'])
   // team 同理走 emoji 回退
-  const team = PickerAvatar({ row: { hasAvatar: false, icon: '👥' } })
+  const team = avatar({ hasAvatar: false, icon: '👥' })
   assert.deepEqual(team.kids, ['👥'])
+})
+
+test('ExpertPicker renders each row avatar as a PickerAvatar element (issue #10)', () => {
+  const { ExpertPicker, PickerAvatar } = client.__internals
+  const byClass = (node, cls, found = []) => {
+    if (!node || typeof node !== 'object') return found
+    if (String(node.props?.className || '').split(/\s+/).includes(cls)) found.push(node)
+    for (const kid of node.kids || []) byClass(kid, cls, found)
+    return found
+  }
+  const rows = toRosterRows(
+    [{ name: 'backend-architect', displayName: '磐石', description: '分布式系统', expertType: 'agent', hasAvatar: true, source: 'dsh' },
+     { name: 'plain', description: 'no display name' }],
+    [])
+  const props = (over) => ({ t: (k) => k, anchor: { left: 100, top: 100 }, onClose() {}, onPick() {}, ...over })
+  // 加载态（rows === null）没有候选行，roster 到达后才有——0.5.12 就是在这一帧崩的
+  assert.equal(byClass(ExpertPicker(props({ rows: null })), 'exp-picker-row').length, 0)
+  const rowEls = byClass(ExpertPicker(props({ rows })), 'exp-picker-row')
+  assert.equal(rowEls.length, rows.length)
+  for (const rowEl of rowEls) {
+    // 头像是 PickerAvatar 组件元素（每行各自持有 useState）；写成直接调用会内联成 img/span
+    const avatar = byClass(rowEl, 'exp-picker-main')[0].kids[0]
+    assert.equal(avatar.type, PickerAvatar)
+  }
+})
+
+// 含 hook 的组件只能经 h(Comp, props) 渲染：当普通函数调用时 hook 记到调用方组件头上，
+// 条数随行数变 → React「Rendered more hooks than during the previous render」→ 宿主
+// error boundary 卸掉整个 slot（issue #10：0.5.12 的 ＋专家 chip 消失）。shim 的 hook
+// 不校验顺序，这类错误只有静态扫描能拦。
+const stripComments = (source) => {
+  const out = []
+  let inBlock = false
+  for (const raw of source.split('\n')) {
+    let line = raw
+    if (inBlock) {
+      const end = line.indexOf('*/')
+      if (end === -1) { out.push(''); continue }
+      line = line.slice(end + 2)
+      inBlock = false
+    }
+    for (;;) {
+      const block = line.indexOf('/*')
+      const single = line.indexOf('//')
+      if (block !== -1 && (single === -1 || block < single)) {
+        const end = line.indexOf('*/', block + 2)
+        if (end === -1) { line = line.slice(0, block); inBlock = true; break }
+        line = line.slice(0, block) + line.slice(end + 2)
+      } else if (single !== -1) { line = line.slice(0, single); break } else break
+    }
+    out.push(line)
+  }
+  return out
+}
+
+test('components with hooks are rendered via h(Comp, props), never called as plain functions (issue #10)', () => {
+  const source = readFileSync(fileURLToPath(new URL('../client/index.js', import.meta.url)), 'utf8')
+  const lines = stripComments(source)
+  const DECL = /^(?:async\s+)?function\s+([A-Z]\w*)\s*\(|^const\s+([A-Z]\w*)\s*=/
+  const TOP_LEVEL = /^(?:async\s+)?function\b|^(?:const|let|var|class)\s/
+  const HOOK = /\b(?:useState|useEffect|useMemo|useRef|useCallback|useLayoutEffect|useContext|useReducer|useSyncExternalStore)\s*\(/
+  // 顶层组件：从声明行到下一个顶层声明之间是一个区块
+  const starts = []
+  lines.forEach((line, i) => { const m = DECL.exec(line); if (m) starts.push({ name: m[1] || m[2], at: i }) })
+  const hookComponents = starts.filter((s) => {
+    let end = lines.length
+    for (let j = s.at + 1; j < lines.length; j++) if (TOP_LEVEL.test(lines[j])) { end = j; break }
+    return HOOK.test(lines.slice(s.at, end).join('\n'))
+  })
+  assert.ok(hookComponents.some((s) => s.name === 'PickerAvatar'), 'PickerAvatar should be detected as a hook component')
+  const offenders = []
+  for (const { name } of hookComponents) {
+    const re = new RegExp(`(?<![\\w$.])${name}\\s*\\(`, 'g')
+    for (const m of source.matchAll(re)) {
+      if (/\b(function|new)\s+$/.test(source.slice(Math.max(0, m.index - 9), m.index))) continue // 声明本身 / new 构造
+      offenders.push(`${name} @ line ${source.slice(0, m.index).split('\n').length}`)
+    }
+  }
+  assert.deepEqual(offenders, [])
 })
 
 test('splitRosterByType separates single experts from teams, sorted order preserved', () => {
